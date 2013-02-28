@@ -76,27 +76,44 @@ def quiet_call(cmd, *args, **kwargs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('device')
-    parser.add_argument('volname', nargs='?')
+    parser.add_argument('--vg-name', dest='vgname', type=str)
     parser.add_argument('--debug', action='store_true')
 
     args = parser.parse_args()
     device = args.device
-    if args.volname is not None:
-        volname = args.volname
+    debug = args.debug
+    if args.vgname is not None:
+        vgname = args.vgname
     else:
-        volname = os.path.basename(device)
-    assert volname
-    assert all(ch in ASCII_ALNUM_WHITELIST for ch in volname)
+        vgname = os.path.basename(device)
+    assert vgname
+    assert all(ch in ASCII_ALNUM_WHITELIST for ch in vgname)
     # TODO: check no VG with that name exists?
+    # Anyway, vgrename uuid newname should fix any problems
 
     fstype = subprocess.check_output(
         'blkid -o value -s TYPE --'.split() + [device]
     ).rstrip().decode('ascii')
+    fslabel = subprocess.check_output(
+        'blkid -o value -s LABEL --'.split() + [device]
+    ).rstrip().decode('ascii')
+    fsuuid = subprocess.check_output(
+        'blkid -o value -s UUID --'.split() + [device]
+    ).rstrip().decode('ascii')
+    if fslabel:
+        lvname = fslabel
+    else:
+        lvname = vgname
+    assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname)
     partsize = int(subprocess.check_output(
         'blockdev --getsize64'.split() + [device]))
     assert partsize % 512 == 0
     if fstype in {'ext2', 'ext3', 'ext4'}:
         fs = ExtFS(device)
+    elif fstype == 'LVM2_member':
+        print(
+            'Already an LVM partition', file=sys.stderr)
+        return 1
     else:
         print(
             'Unsupported filesystem type: {}'.format(fstype), file=sys.stderr)
@@ -111,7 +128,7 @@ def main():
     pe_newpos = pe_count * pe_size
     fssize_lim = (pe_newpos // fs.block_size) * fs.block_size
 
-    if args.debug:
+    if debug:
         print(
             'pe {} bs {} fssize {} fssize_lim {} pe_newpos {} partsize {}'
             .format(
@@ -145,7 +162,7 @@ def main():
         cfgf = st.enter_context(
             tempfile.NamedTemporaryFile(
                 suffix='.vgcfg', mode='w', encoding='ascii',
-                delete=not args.debug))
+                delete=not debug))
 
         lo_dev = subprocess.check_output(
             'losetup -f --show --'.split() + [imgf.name]
@@ -208,8 +225,8 @@ def main():
                 }}
             }}
             '''.format(
-                vgname=volname,
-                lvname=volname,
+                vgname=vgname,
+                lvname=lvname,
                 pe_sectors=pe_sectors,
                 pv_uuid=pv_uuid,
                 vg_uuid=vg_uuid,
@@ -242,7 +259,7 @@ def main():
              '--uuid', str(pv_uuid), '--zero', 'y', '--',
              '/dev/mapper/' + synth_devname])
         quiet_call(
-            ['vgcfgrestore', '--file', cfgf.name, '--', volname])
+            ['vgcfgrestore', '--file', cfgf.name, '--', vgname])
         lvm_data = imgf.read()
         assert len(lvm_data) == pe_size
 
@@ -258,6 +275,17 @@ def main():
     wr_len = os.pwrite(dev_fd, lvm_data, 0)
     assert wr_len == pe_size
     print('LVM conversion successful!')
+    if False:
+        print('Enable the volume group with\n'
+              '    sudo vgchange -ay -- {}'.format(vgname))
+    elif False:
+        print('Enable the logical volume with\n'
+              '    sudo lvchange -ay -- {}/{}'.format(vgname, lvname))
+    else:
+        print('Volume group name: {}\n'
+              'Logical volume name: {}\n'
+              'Filesystem uuid: {}'
+              .format(vgname, lvname, fsuuid))
 
 
 def script_main():

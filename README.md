@@ -32,15 +32,11 @@ Or get the latest version:
 # Usage
 
     lvmify --help
+    sudo lvmify /dev/sdaN
 
 If lvmify isn't in your path, replace with:
 
     sudo python3.3 -m lvmify
-
-    sudo lvmify /dev/sdaN [NewVolumeName]
-
-NewVolumeName defaults to sdaN, and is used for the new LV and the new
-VG.
 
 Don't forget to update `/etc/fstab` (no change is necessary if it uses
 the filesystem uuid). If necessary, rebuild the grub config (grub2
