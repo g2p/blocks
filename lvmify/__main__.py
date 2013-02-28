@@ -1,4 +1,4 @@
-# Python 3
+# Python 3.3
 
 import argparse
 import contextlib
@@ -60,6 +60,19 @@ def mk_dm(devname, table, readonly, exit_stack):
             'dmsetup remove --'.split() + [devname]))
 
 
+def quiet_call(cmd, *args, **kwargs):
+    proc = subprocess.Popen(
+        cmd, *args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+    odat, edat = proc.communicate()
+    if proc.returncode != 0:
+        print(
+            'Command {!r} has failed with status {}\n'
+            'Standard output:\n{}\n'
+            'Standard error:\n{}'.format(
+                cmd, proc.returncode, odat, edat), file=sys.stderr)
+        raise subprocess.CalledProcessError(proc.returncode, cmd, odat)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('device')
@@ -97,9 +110,14 @@ def main():
     # The position of the moved pe
     pe_newpos = pe_count * pe_size
     fssize_lim = (pe_newpos // fs.block_size) * fs.block_size
-    print(
-        'pe {} bs {} fssize {} fssize_lim {} pe_newpos {} partsize {}'.format(
-            pe_size, fs.block_size, fssize, fssize_lim, pe_newpos, partsize))
+
+    if args.debug:
+        print(
+            'pe {} bs {} fssize {} fssize_lim {} pe_newpos {} partsize {}'
+            .format(
+                pe_size, fs.block_size, fssize,
+                fssize_lim, pe_newpos, partsize))
+
     if fssize > fssize_lim:
         print(
             'Will shrink the filesystem by {} bytes'.format(
@@ -219,11 +237,11 @@ def main():
             readonly=False,
             exit_stack=st)
 
-        subprocess.check_call(
+        quiet_call(
             ['pvcreate', '--restorefile', cfgf.name,
              '--uuid', str(pv_uuid), '--zero', 'y', '--',
              '/dev/mapper/' + synth_devname])
-        subprocess.check_call(
+        quiet_call(
             ['vgcfgrestore', '--file', cfgf.name, '--', volname])
         lvm_data = imgf.read()
         assert len(lvm_data) == pe_size
@@ -231,7 +249,7 @@ def main():
     # Recovery: copy back the PE we had moved to the end of the device.
     print(
         'If the next stage is interrupted, it can be reverted with:\n'
-        'dd if={device} of={device} bs={pe_size} count=1 skip={pe_count}'
+        '    dd if={device} of={device} bs={pe_size} count=1 skip={pe_count}'
         .format(
             device=device, pe_size=pe_size, pe_count=pe_count))
 
@@ -239,6 +257,7 @@ def main():
     # Though technically, only sector writes are guaranteed atomic
     wr_len = os.pwrite(dev_fd, lvm_data, 0)
     assert wr_len == pe_size
+    print('LVM conversion successful!')
 
 
 if __name__ == '__main__':
