@@ -260,6 +260,10 @@ def main():
     print('LVM conversion successful!')
 
 
-if __name__ == '__main__':
+def script_main():
     sys.exit(main())
+
+
+if __name__ == '__main__':
+    script_main()
 
