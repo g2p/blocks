@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import uuid
 
 
@@ -36,15 +37,33 @@ class ExtFS(Filesystem):
             elif line.startswith(b'Block count:'):
                 line = line.decode('ascii')
                 self.block_count = int(line.split(':', 1)[1])
+            elif line.startswith(b'Filesystem state:'):
+                line = line.decode('ascii')
+                self.state = line.split(':', 1)[1].strip()
+            elif line.startswith(b'Last mount time:'):
+                line = line.decode('ascii')
+                self.mount_tm = time.strptime(line.split(':', 1)[1].strip())
+            elif line.startswith(b'Last checked:'):
+                line = line.decode('ascii')
+                self.check_tm = time.strptime(line.split(':', 1)[1].strip())
         return self.block_size * self.block_count
 
     def resize(self, target_size):
-        # resize2fs will require that the filesystem was checked
-        # immediately before.
         block_count, rem = divmod(target_size, self.block_size)
         assert rem == 0
-        subprocess.check_call(
-            'resize2fs -p --'.split() + [self.device, '%d' % block_count])
+        # resize2fs requires that the filesystem was checked
+        if self.state != 'clean' or self.check_tm < self.mount_tm:
+            print('Checking the filesystem before resizing it')
+            # Can't use the -n flag, it is strictly read-only and won't
+            # update check_tm in the superblock
+            # XXX Without either of -n -p -y, e2fsck will require a
+            # terminal on stdin
+            subprocess.check_call('e2fsck -f --'.split() + [self.device])
+            # Another option:
+            #quiet_call('e2fsck -fp --'.split() + [self.device])
+            self.check_tm = self.mount_tm
+        quiet_call(
+            'resize2fs --'.split() + [self.device, '%d' % block_count])
         assert self.get_size() == target_size
 
 
@@ -61,8 +80,10 @@ def mk_dm(devname, table, readonly, exit_stack):
 
 
 def quiet_call(cmd, *args, **kwargs):
+    # universal_newlines is used to enable io decoding in the current locale
     proc = subprocess.Popen(
-        cmd, *args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+        cmd, *args, universal_newlines=True, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
     odat, edat = proc.communicate()
     if proc.returncode != 0:
         print(
