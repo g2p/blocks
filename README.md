@@ -23,6 +23,9 @@ Python 3.3, LVM 2
 
     pip install --user lvmify
 
+`pip` can be replaced with `pip-3.3` or `python3.3 -m pip.runner` to
+invoke the correct Python version.
+
 Or get the latest version:
 
     git clone https://github.com/g2p/lvmify.git
