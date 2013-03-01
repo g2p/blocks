@@ -28,7 +28,30 @@ class Filesystem:
         return self.block_size * self.block_count
 
 
+class XFS(Filesystem):
+    can_shrink = False
+
+    def read_superblock(self):
+        self.block_size = None
+        self.block_count = None
+
+        proc = subprocess.Popen(
+            ['xfs_db', '-c', 'sb 0', '-c', 'p dblocks blocksize',
+             '--', self.device], stdout=subprocess.PIPE)
+        for line in proc.stdout:
+            if line.startswith(b'dblocks ='):
+                line = line.decode('ascii')
+                self.block_count = int(line.split('=', 1)[1])
+            elif line.startswith(b'blocksize ='):
+                line = line.decode('ascii')
+                self.block_size = int(line.split('=', 1)[1])
+        proc.wait()
+        assert proc.returncode == 0
+
+
 class BtrFS(Filesystem):
+    can_shrink = True
+
     def read_superblock(self):
         self.block_size = None
         self.size_bytes = None
@@ -77,6 +100,8 @@ class BtrFS(Filesystem):
 
 
 class ReiserFS(Filesystem):
+    can_shrink = True
+
     def read_superblock(self):
         self.block_size = None
         self.block_count = None
@@ -105,6 +130,8 @@ class ReiserFS(Filesystem):
 
 
 class ExtFS(Filesystem):
+    can_shrink = True
+
     def read_superblock(self):
         self.block_size = None
         self.block_count = None
@@ -226,6 +253,8 @@ def main():
         fs = ReiserFS(device)
     elif fstype == 'btrfs':
         fs = BtrFS(device)
+    elif fstype == 'xfs':
+        fs = XFS(device)
     elif fstype == 'LVM2_member':
         print(
             'Already an LVM partition', file=sys.stderr)
@@ -253,10 +282,16 @@ def main():
                 fssize_lim, pe_newpos, partsize))
 
     if fs.fssize > fssize_lim:
-        print(
-            'Will shrink the filesystem ({}) by {} bytes'.format(
-                fstype, fs.fssize - fssize_lim))
-        fs.resize(fssize_lim)
+        if fs.can_shrink:
+            print(
+                'Will shrink the filesystem ({}) by {} bytes'.format(
+                    fstype, fs.fssize - fssize_lim))
+            fs.resize(fssize_lim)
+        else:
+            print(
+                'Can\'t shrink filesystem ({}), but need another {} bytes '
+                'at the end'.format(fstype, fs.fssize - fssize_lim))
+            return 1
     else:
         print(
             'The filesystem ({}) leaves enough room, '
