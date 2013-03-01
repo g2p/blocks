@@ -207,8 +207,9 @@ def main():
         fs.resize(fssize_lim)
     # O_EXCL on a block device takes the device lock,
     # exclusive against mounts and the like.
-    # I'm not sure which of O_SYNC and O_DIRECT will ensure durability.
-    # O_DIRECT has inconvenient alignment constraints.
+    # O_SYNC on a block device provides durability, see:
+    # http://www.codeproject.com/Articles/460057/HDD-FS-O_SYNC-Throughput-vs-Integrity
+    # O_DIRECT would bypass the block cache, which is irrelevant here
     dev_fd = os.open(device, os.O_SYNC|os.O_RDWR|os.O_EXCL)
     print(
         'Copying {} bytes from pos 0 to pos {}... '
