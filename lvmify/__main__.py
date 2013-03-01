@@ -23,14 +23,51 @@ class Filesystem:
     def __init__(self, device):
         self.device = device
 
+    @property
+    def fssize(self):
+        return self.block_size * self.block_count
 
-class ExtFS(Filesystem):
-    def get_size(self):
-        cmd = subprocess.Popen(
-            'tune2fs -l --'.split() + [self.device], stdout=subprocess.PIPE)
+
+class ReiserFS(Filesystem):
+    def read_superblock(self):
         self.block_size = None
         self.block_count = None
-        for line in cmd.stdout:
+
+        proc = subprocess.Popen(
+            'reiserfstune --'.split() + [self.device], stdout=subprocess.PIPE)
+
+        for line in proc.stdout:
+            if line.startswith(b'Blocksize:'):
+                line = line.decode('ascii')
+                self.block_size = int(line.split(':', 1)[1])
+            elif line.startswith(b'Count of blocks on the device:'):
+                line = line.decode('ascii')
+                self.block_count = int(line.split(':', 1)[1])
+        proc.wait()
+        assert proc.returncode == 0
+
+    def resize(self, target_size):
+        assert target_size % self.block_size == 0
+        subprocess.check_call(
+            ['resize_reiserfs', '-q', '-s', '%d' % target_size,
+             '--', self.device])
+        # Update self.block_count, used by self.fssize
+        self.read_superblock()
+        assert self.fssize == target_size
+
+
+class ExtFS(Filesystem):
+    def read_superblock(self):
+        self.block_size = None
+        self.block_count = None
+        self.state = None
+        self.mount_tm = None
+        self.check_tm = None
+
+        proc = subprocess.Popen(
+            'tune2fs -l --'.split() + [self.device], stdout=subprocess.PIPE)
+
+        for line in proc.stdout:
             if line.startswith(b'Block size:'):
                 line = line.decode('ascii')
                 self.block_size = int(line.split(':', 1)[1])
@@ -46,11 +83,13 @@ class ExtFS(Filesystem):
             elif line.startswith(b'Last checked:'):
                 line = line.decode('ascii')
                 self.check_tm = time.strptime(line.split(':', 1)[1].strip())
-        return self.block_size * self.block_count
+        proc.wait()
+        assert proc.returncode == 0
 
     def resize(self, target_size):
         block_count, rem = divmod(target_size, self.block_size)
         assert rem == 0
+
         # resize2fs requires that the filesystem was checked
         if self.state != 'clean' or self.check_tm < self.mount_tm:
             print('Checking the filesystem before resizing it')
@@ -64,7 +103,10 @@ class ExtFS(Filesystem):
             self.check_tm = self.mount_tm
         quiet_call(
             'resize2fs --'.split() + [self.device, '%d' % block_count])
-        assert self.get_size() == target_size
+
+        # Update self.block_count, used by self.fssize
+        self.read_superblock()
+        assert self.fssize == target_size
 
 
 def mk_dm(devname, table, readonly, exit_stack):
@@ -75,7 +117,7 @@ def mk_dm(devname, table, readonly, exit_stack):
     proc.communicate(table.encode('ascii'))
     assert proc.returncode == 0
     exit_stack.callback(lambda:
-        subprocess.check_call(
+        quiet_call(
             'dmsetup remove --'.split() + [devname]))
 
 
@@ -131,6 +173,8 @@ def main():
     assert partsize % 512 == 0
     if fstype in {'ext2', 'ext3', 'ext4'}:
         fs = ExtFS(device)
+    elif fstype == 'reiserfs':
+        fs = ReiserFS(device)
     elif fstype == 'LVM2_member':
         print(
             'Already an LVM partition', file=sys.stderr)
@@ -139,7 +183,7 @@ def main():
         print(
             'Unsupported filesystem type: {}'.format(fstype), file=sys.stderr)
         return 1
-    fssize = fs.get_size()
+    fs.read_superblock()
     pe_size = LVM_PE
     assert pe_size % 512 == 0
     pe_sectors = pe_size // 512
@@ -153,24 +197,30 @@ def main():
         print(
             'pe {} bs {} fssize {} fssize_lim {} pe_newpos {} partsize {}'
             .format(
-                pe_size, fs.block_size, fssize,
+                pe_size, fs.block_size, fs.fssize,
                 fssize_lim, pe_newpos, partsize))
 
-    if fssize > fssize_lim:
+    if fs.fssize > fssize_lim:
         print(
             'Will shrink the filesystem by {} bytes'.format(
-                fssize - fssize_lim))
+                fs.fssize - fssize_lim))
         fs.resize(fssize_lim)
     # O_EXCL on a block device takes the device lock,
     # exclusive against mounts and the like.
     # I'm not sure which of O_SYNC and O_DIRECT will ensure durability.
     # O_DIRECT has inconvenient alignment constraints.
     dev_fd = os.open(device, os.O_SYNC|os.O_RDWR|os.O_EXCL)
-    print('Copying {} bytes from pos 0 to pos {}'.format(pe_size, pe_newpos))
+    print(
+        'Copying {} bytes from pos 0 to pos {}... '
+        .format(pe_size, pe_newpos),
+        end='', flush=True)
     pe_data = os.pread(dev_fd, pe_size, 0)
     assert len(pe_data) == pe_size
     wr_len = os.pwrite(dev_fd, pe_data, pe_newpos)
     assert wr_len == pe_size
+    print('ok')
+
+    print('Preparing LVM metadata... ', end='', flush=True)
 
     # The changes so far (fs resize, possibly an fsck, and the copy)
     # should have no user-visible effects.
@@ -189,7 +239,7 @@ def main():
             'losetup -f --show --'.split() + [imgf.name]
         ).rstrip().decode('ascii')
         st.callback(lambda:
-            subprocess.check_call('losetup -d --'.split() + [lo_dev]))
+            quiet_call('losetup -d --'.split() + [lo_dev]))
         pv_uuid = uuid.uuid1()
         vg_uuid = uuid.uuid1()
         lv_uuid = uuid.uuid1()
@@ -283,6 +333,7 @@ def main():
             ['vgcfgrestore', '--file', cfgf.name, '--', vgname])
         lvm_data = imgf.read()
         assert len(lvm_data) == pe_size
+    print('ok')  # after 'Preparing LVM metadata'
 
     # Recovery: copy back the PE we had moved to the end of the device.
     print(
@@ -291,10 +342,12 @@ def main():
         .format(
             device=device, pe_size=pe_size, pe_count=pe_count))
 
+    print('Installing LVM metadata... ', end='', flush=True)
     # This had better be atomic
     # Though technically, only sector writes are guaranteed atomic
     wr_len = os.pwrite(dev_fd, lvm_data, 0)
     assert wr_len == pe_size
+    print('ok')
     print('LVM conversion successful!')
     if False:
         print('Enable the volume group with\n'
