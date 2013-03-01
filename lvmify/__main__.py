@@ -28,6 +28,54 @@ class Filesystem:
         return self.block_size * self.block_count
 
 
+class BtrFS(Filesystem):
+    def read_superblock(self):
+        self.block_size = None
+        self.size_bytes = None
+        self.devid = None
+
+        proc = subprocess.Popen(
+            'btrfs-show-super --'.split() + [self.device],
+            stdout=subprocess.PIPE)
+
+        for line in proc.stdout:
+            if line.startswith(b'dev_item.devid'):
+                line = line.decode('ascii')
+                self.devid = int(line.split(maxsplit=1)[1])
+            elif line.startswith(b'sectorsize'):
+                line = line.decode('ascii')
+                self.block_size = int(line.split(maxsplit=1)[1])
+            elif line.startswith(b'dev_item.total_bytes'):
+                line = line.decode('ascii')
+                self.size_bytes = int(line.split(maxsplit=1)[1])
+        proc.wait()
+        assert proc.returncode == 0
+
+    @property
+    def fssize(self):
+        return self.size_bytes
+
+    def resize(self, target_size):
+        assert target_size % self.block_size == 0
+        with contextlib.ExitStack() as st:
+            mpoint = st.enter_context(
+                tempfile.TemporaryDirectory(suffix='.privmnt'))
+            # TODO: use unshare() here
+            quiet_call(
+                'mount -t btrfs -o noatime,noexec,nodev -n --'.split()
+                + [self.device, mpoint])
+            # XXX It seems the device is still unavailable
+            # immediately after unmounting.
+            st.callback(lambda:
+                quiet_call('umount -n -- '.split() + [mpoint]))
+            quiet_call(
+                'btrfs filesystem resize'.split()
+                + ['{}:{}'.format(self.devid, target_size), mpoint])
+        # Update self.size_bytes, used by self.fssize
+        self.read_superblock()
+        assert self.fssize == target_size
+
+
 class ReiserFS(Filesystem):
     def read_superblock(self):
         self.block_size = None
@@ -171,10 +219,13 @@ def main():
     partsize = int(subprocess.check_output(
         'blockdev --getsize64'.split() + [device]))
     assert partsize % 512 == 0
+
     if fstype in {'ext2', 'ext3', 'ext4'}:
         fs = ExtFS(device)
     elif fstype == 'reiserfs':
         fs = ReiserFS(device)
+    elif fstype == 'btrfs':
+        fs = BtrFS(device)
     elif fstype == 'LVM2_member':
         print(
             'Already an LVM partition', file=sys.stderr)
@@ -183,6 +234,7 @@ def main():
         print(
             'Unsupported filesystem type: {}'.format(fstype), file=sys.stderr)
         return 1
+
     fs.read_superblock()
     pe_size = LVM_PE
     assert pe_size % 512 == 0
@@ -202,9 +254,13 @@ def main():
 
     if fs.fssize > fssize_lim:
         print(
-            'Will shrink the filesystem by {} bytes'.format(
-                fs.fssize - fssize_lim))
+            'Will shrink the filesystem ({}) by {} bytes'.format(
+                fstype, fs.fssize - fssize_lim))
         fs.resize(fssize_lim)
+    else:
+        print(
+            'The filesystem ({}) leaves enough room, '
+            'no need to shrink it'.format(fstype))
     # O_EXCL on a block device takes the device lock,
     # exclusive against mounts and the like.
     # O_SYNC on a block device provides durability, see:
