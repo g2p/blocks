@@ -158,7 +158,7 @@ class ExtFS(Filesystem):
 
 
 def mk_dm(devname, table, readonly, exit_stack):
-    cmd = 'dmsetup create --'.split() + [devname]
+    cmd = 'dmsetup create --noudevsync --'.split() + [devname]
     if readonly:
         cmd[2:2] = ['--readonly']
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
@@ -166,7 +166,7 @@ def mk_dm(devname, table, readonly, exit_stack):
     assert proc.returncode == 0
     exit_stack.callback(lambda:
         quiet_call(
-            'dmsetup remove --'.split() + [devname]))
+            'dmsetup remove --noudevsync --'.split() + [devname]))
 
 
 def quiet_call(cmd, *args, **kwargs):
@@ -382,6 +382,9 @@ def main():
             readonly=False,
             exit_stack=st)
 
+        # This next command is rather slow:
+        # it scans block devices for the uuid we just made up,
+        # then rebuilds the lvm device cache.
         quiet_call(
             ['pvcreate', '--restorefile', cfgf.name,
              '--uuid', str(pv_uuid), '--zero', 'y', '--',
