@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import os
+import re
 import string
 import subprocess
 import sys
@@ -211,6 +212,17 @@ def quiet_call(cmd, *args, **kwargs):
         raise subprocess.CalledProcessError(proc.returncode, cmd, odat)
 
 
+@contextlib.contextmanager
+def setenv(var, val):
+    old = os.environ.get(var)
+    os.environ[var] = val
+    yield
+    if old is not None:
+        os.environ[var] = old
+    else:
+        del os.environ[var]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('device')
@@ -337,6 +349,15 @@ def main():
         lv_uuid = uuid.uuid1()
         rozeros_devname = 'rozeros-{}'.format(uuid.uuid1())
         synth_devname = 'synthetic-{}'.format(uuid.uuid1())
+        synth_devpath = '/dev/mapper/' + synth_devname
+
+        lvmcfgdir = st.enter_context(
+            tempfile.TemporaryDirectory(suffix='.lvmconf'))
+
+        with open(os.path.join(lvmcfgdir + 'lvm.conf'), 'w') as conffile:
+            conffile.write(
+               'devices {{ filter=["a/{synth_re}/", "r/.*/"] }}'
+                .format(synth_re=re.escape(synth_devpath)))
 
         cfgf.write(textwrap.dedent(
             '''
@@ -417,15 +438,17 @@ def main():
             readonly=False,
             exit_stack=st)
 
-        # This next command is rather slow:
-        # it scans block devices for the uuid we just made up,
-        # then rebuilds the lvm device cache.
+        # Prevent the next too commands from scanning every device (slow),
+        # we already know lvm should write only to the synthetic pv.
+        st.enter_context(setenv('LVM_SYSTEM_DIR', lvmcfgdir))
+
         quiet_call(
             ['pvcreate', '--restorefile', cfgf.name,
              '--uuid', str(pv_uuid), '--zero', 'y', '--',
-             '/dev/mapper/' + synth_devname])
+             synth_devpath])
         quiet_call(
             ['vgcfgrestore', '--file', cfgf.name, '--', vgname])
+
         lvm_data = imgf.read()
         assert len(lvm_data) == pe_size
     print('ok')  # after 'Preparing LVM metadata'
