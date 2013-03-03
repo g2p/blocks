@@ -22,6 +22,7 @@ Python 3.3, LVM 2
 # Installation
 
     pip install --user lvmify
+    cp -lt ~/bin ~/.local/bin/lvmify
 
 `pip` can be replaced with `pip-3.3` or `python3.3 -m pip.runner` to
 invoke the correct Python version.
@@ -31,6 +32,7 @@ Or get the latest version:
     git clone https://github.com/g2p/lvmify.git
     cd lvmify
     python3.3 setup.py develop --user
+    cp -lt ~/bin ~/.local/bin/lvmify
 
 # Usage
 
