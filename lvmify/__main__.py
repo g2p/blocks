@@ -356,7 +356,7 @@ def main():
 
         with open(os.path.join(lvmcfgdir + 'lvm.conf'), 'w') as conffile:
             conffile.write(
-               'devices {{ filter=["a/{synth_re}/", "r/.*/"] }}'
+               'devices {{ filter=["a/^{synth_re}$/", "r/.*/"] }}'
                 .format(synth_re=re.escape(synth_devpath)))
 
         cfgf.write(textwrap.dedent(
