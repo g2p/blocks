@@ -420,9 +420,15 @@ def main():
             )))
         cfgf.flush()
 
+        # The readonly flag is ignored when stacked under a linear
+        # target, so the use of an intermediate device does not bring
+        # the expected benefit. This forces us to use the 'error'
+        # target to catch writes that are out of bounds.
+        # LVM will ignore read errors in the discovery phase (we hide
+        # the output), and will fail on write errors appropriately.
         mk_dm(
             rozeros_devname,
-            '0 {extra_sectors} zero\n'
+            '0 {extra_sectors} error\n'
             .format(
                 extra_sectors=(partsize - pe_size) // 512),
             readonly=True,
