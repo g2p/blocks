@@ -354,7 +354,7 @@ def main():
         lvmcfgdir = st.enter_context(
             tempfile.TemporaryDirectory(suffix='.lvmconf'))
 
-        with open(os.path.join(lvmcfgdir + 'lvm.conf'), 'w') as conffile:
+        with open(os.path.join(lvmcfgdir, 'lvm.conf'), 'w') as conffile:
             conffile.write(
                'devices {{ filter=["a/^{synth_re}$/", "r/.*/"] }}'
                 .format(synth_re=re.escape(synth_devpath)))
