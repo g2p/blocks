@@ -222,6 +222,41 @@ class XFS(Filesystem):
         assert proc.returncode == 0
 
 
+class NilFS(Filesystem):
+    can_shrink = True
+    resize_needs_mpoint = True
+    vfstype = 'nilfs2'
+
+    def read_superblock(self):
+        self.block_size = None
+        self.size_bytes = None
+
+        proc = subprocess.Popen(
+            'nilfs-tune -l --'.split() + [self.device.devpath],
+            stdout=subprocess.PIPE)
+
+        for line in proc.stdout:
+            if line.startswith(b'Block size:'):
+                line = line.decode('ascii')
+                self.block_size = int(line.split(':', 1)[1])
+            elif line.startswith(b'Device size:'):
+                line = line.decode('ascii')
+                self.size_bytes = int(line.split(':', 1)[1])
+        proc.wait()
+        assert proc.returncode == 0
+
+    @property
+    def fssize(self):
+        assert self.size_bytes % self.block_size == 0
+        return self.size_bytes
+
+    def _resize(self, target_size):
+        assert target_size % self.block_size == 0
+        quiet_call(
+            ['nilfs-resize', '--yes', '--',
+             self.device.devpath, '%d' % target_size])
+
+
 class BtrFS(Filesystem):
     can_shrink = True
     resize_needs_mpoint = True
@@ -475,6 +510,8 @@ def get_block_stack(device):
             stack.append(ReiserFS(device))
         elif device.superblock_type == 'btrfs':
             stack.append(BtrFS(device))
+        elif device.superblock_type == 'nilfs2':
+            stack.append(NilFS(device))
         elif device.superblock_type == 'xfs':
             stack.append(XFS(device))
         else:
