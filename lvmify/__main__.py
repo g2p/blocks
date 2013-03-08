@@ -62,6 +62,25 @@ class BlockDevice:
             'dmsetup table --'.split() + [self.devpath],
             universal_newlines=True)
 
+    def is_partition(self):
+        return os.path.exists(self.sysfspath + '/start')
+
+
+class Partition(BlockDevice):
+    def partition_container_devpath(self):
+        assert self.is_partition()
+
+        with open(self.sysfspath + '/../dev') as fi:
+            devnum = fi.read().rstrip()
+        return os.path.realpath('/dev/block/' + devnum)
+
+    def open_partition_container(self):
+        return PartitionedDevice(self.partition_container_devpath())
+
+
+class PartitionedDevice(BlockDevice):
+    pass
+
 
 class BlockData:
     def __init__(self, device):
@@ -543,8 +562,19 @@ def main():
     sp_to_lvm.add_argument('--vg-name', dest='vgname', type=str)
     sp_to_lvm.set_defaults(action=cmd_to_lvm)
 
+    sp_to_bcache = commands.add_parser('to-bcache', help='Convert to LVM')
+    sp_to_bcache.add_argument('device')
+    sp_to_bcache.set_defaults(action=cmd_to_bcache)
+
     args = parser.parse_args()
     return args.action(args)
+
+
+def cmd_to_bcache(args):
+    device = Partition(args.device)
+    debug = args.debug
+
+    container = device.open_partition_container()
 
 
 def cmd_to_lvm(args):
