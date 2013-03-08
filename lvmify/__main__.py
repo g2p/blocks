@@ -73,10 +73,14 @@ class CantShrink(Exception):
 
 
 class Filesystem(BlockData):
+    resize_needs_mpoint = False
+
     def reserve_end_area_nonrec(self, pos):
         return self.reserve_end_area(pos)
 
     def reserve_end_area(self, pos):
+        # XXX Non-reentrant (self.mpoint)
+
         # align to a block boundary that doesn't encroach
         pos = (pos // self.block_size) * self.block_size
 
@@ -86,7 +90,18 @@ class Filesystem(BlockData):
         if not self.can_shrink:
             raise CantShrink(self)
 
-        self.resize(pos)
+        with contextlib.ExitStack() as st:
+            if self.resize_needs_mpoint:
+                self.mpoint = st.enter_context(
+                    tempfile.TemporaryDirectory(suffix='.privmnt'))
+                # TODO: use unshare() here
+                quiet_call(
+                    ['mount', '-t', self.vfstype, '-o', 'noatime,noexec,nodev',
+                     '-n', '--', self.device.devpath, self.mpoint])
+                st.callback(lambda:
+                    quiet_call('umount -n -- '.split() + [self.mpoint]))
+            self._resize(pos)
+
 
         # measure size again
         self.read_superblock()
@@ -122,6 +137,7 @@ class LUKS(SimpleContainer):
     pycryptsetup isn't used because:
         it isn't in PyPI, or in Debian or Ubuntu
         it isn't Python 3
+        it's incomplete (resize not included)
     """
 
     _superblock_read = False
@@ -208,6 +224,8 @@ class XFS(Filesystem):
 
 class BtrFS(Filesystem):
     can_shrink = True
+    resize_needs_mpoint = True
+    vfstype = 'btrfs'
 
     def read_superblock(self):
         self.block_size = None
@@ -236,22 +254,13 @@ class BtrFS(Filesystem):
         assert self.size_bytes % self.block_size == 0
         return self.size_bytes
 
-    def resize(self, target_size):
+    def _resize(self, target_size):
         assert target_size % self.block_size == 0
-        with contextlib.ExitStack() as st:
-            mpoint = st.enter_context(
-                tempfile.TemporaryDirectory(suffix='.privmnt'))
-            # TODO: use unshare() here
-            quiet_call(
-                'mount -t btrfs -o noatime,noexec,nodev -n --'.split()
-                + [self.device.devpath, mpoint])
-            # XXX It seems the device is still unavailable
-            # immediately after unmounting.
-            st.callback(lambda:
-                quiet_call('umount -n -- '.split() + [mpoint]))
-            quiet_call(
-                'btrfs filesystem resize'.split()
-                + ['{}:{}'.format(self.devid, target_size), mpoint])
+        # XXX It seems the device is still unavailable
+        # immediately after unmounting.
+        quiet_call(
+            'btrfs filesystem resize'.split()
+            + ['{}:{}'.format(self.devid, target_size), self.mpoint])
 
 
 class ReiserFS(Filesystem):
@@ -275,7 +284,7 @@ class ReiserFS(Filesystem):
         proc.wait()
         assert proc.returncode == 0
 
-    def resize(self, target_size):
+    def _resize(self, target_size):
         assert target_size % self.block_size == 0
         subprocess.check_call(
             ['resize_reiserfs', '-q', '-s', '%d' % target_size,
@@ -315,7 +324,7 @@ class ExtFS(Filesystem):
         proc.wait()
         assert proc.returncode == 0
 
-    def resize(self, target_size):
+    def _resize(self, target_size):
         block_count, rem = divmod(target_size, self.block_size)
         assert rem == 0
 
