@@ -535,11 +535,19 @@ class ShiftConvertStrategy(ConvertStrategy):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('device')
-    parser.add_argument('--vg-name', dest='vgname', type=str)
     parser.add_argument('--debug', action='store_true')
+    commands = parser.add_subparsers(dest='command', metavar='command')
+
+    sp_to_lvm = commands.add_parser('to-lvm', help='Convert to LVM')
+    sp_to_lvm.add_argument('device')
+    sp_to_lvm.add_argument('--vg-name', dest='vgname', type=str)
+    sp_to_lvm.set_defaults(action=cmd_to_lvm)
 
     args = parser.parse_args()
+    return args.action(args)
+
+
+def cmd_to_lvm(args):
     device = BlockDevice(args.device)
     debug = args.debug
 

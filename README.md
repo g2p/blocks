@@ -37,9 +37,9 @@ Or get the latest version:
 # Usage
 
     lvmify --help
-    sudo lvmify /dev/sdaN
+    sudo lvmify to-lvm /dev/sdaN
 
-If lvmify isn't in your path, replace with:
+If `lvmify` isn't in your path, replace with:
 
     sudo python3.3 -m lvmify
 
