@@ -27,27 +27,44 @@ dm_crypt_re = re.compile(
     re.ASCII)
 
 
+# SQLa, compatible license
+class memoized_property(object):
+    """A read-only @property that is only evaluated once."""
+    def __init__(self, fget, doc=None):
+        self.fget = fget
+        self.__doc__ = doc or fget.__doc__
+        self.__name__ = fget.__name__
+
+    def __get__(self, obj, cls):
+        if obj is None:
+            return self
+        obj.__dict__[self.__name__] = result = self.fget(obj)
+        return result
+
+    def _reset(self, obj):
+        obj.__dict__.pop(self.__name__, None)
+
+
 class BlockDevice:
     def __init__(self, devpath):
         self.devpath = devpath
 
-    @property
+    @memoized_property
     def superblock_type(self):
-        self.__dict__['superblock_type'] = rv = subprocess.check_output(
+        return subprocess.check_output(
             'blkid -o value -s TYPE --'.split() + [self.devpath]
         ).rstrip().decode('ascii')
-        return rv
 
-    @property
+    @memoized_property
     def size(self):
         rv = int(subprocess.check_output(
             'blockdev --getsize64'.split() + [self.devpath]))
         assert rv % 512 == 0
-        self.__dict__['size'] = rv
         return rv
 
     @property
     def sysfspath(self):
+        # XXX Only works on /dev/sd?? style
         di, ba = os.path.split(self.devpath)
         assert di == '/dev'  # or realpath but yagni
         assert ba
@@ -66,25 +83,90 @@ class BlockDevice:
         return os.path.exists(self.sysfspath + '/start')
 
 
+def ptable_devpath(bdev):
+    assert bdev.is_partition()
+
+    with open(bdev.sysfspath + '/../dev') as fi:
+        devnum = fi.read().rstrip()
+    return os.path.realpath('/dev/block/' + devnum)
+
+
+def container_of_partition(bdev):
+    # The container device isn't a partition table, just the
+    # device where the partition table is stored.
+    return PartitionedDevice(ptable_devpath(bdev))
+
+
 class Partition(BlockDevice):
-    def partition_container_devpath(self):
-        assert self.is_partition()
+    def __init__(self, devpath, partitioned_device):
+        BlockDevice.__init__(self, devpath=devpath)
+        # XXX Stricter verifications that partitioned_device contains devpath
+        self.partitioned_device = partitioned_device
 
-        with open(self.sysfspath + '/../dev') as fi:
-            devnum = fi.read().rstrip()
-        return os.path.realpath('/dev/block/' + devnum)
+    @property
+    def start(self):
+        # Not memoized, we change it
+        return int(open(self.sysfspath + '/start').read())
 
-    def open_partition_container(self):
-        return PartitionedDevice(self.partition_container_devpath())
+    @memoized_property
+    def parted_partition(self):
+        pdisk = self.partitioned_device.ptable.parted_disk
+        return pdisk.getPartitionBySector(self.start)
+
+    @memoized_property
+    def prev_parted_partition(self):
+        # The previous partition, skipping over free space
+        # XXX There is no guarantee this partition has a
+        # device node.
+        import _ped
+        pdisk = self.partitioned_device.ptable.parted_disk
+        rv = pdisk.getPartitionBySector(self.start - 1)
+        if rv.type == _ped.PARTITION_FREESPACE:
+            rv = pdisk.getPartitionBySector(rv.geometry.start - 1)
+            assert rv.type != _ped.PARTITION_FREESPACE
+        return rv
+
+    @memoized_property
+    def prev_partition(self):
+        devpath = self.prev_parted_partition.path
+        if not os.path.exists(devpath):
+            raise UnmappedPartition(
+                self.devpath, self.prev_parted_partition.geometry.start)
+        return Partition(devpath, partitioned_device=self.partitioned_device)
 
 
 class PartitionedDevice(BlockDevice):
-    pass
+    @memoized_property
+    def ptable_type(self):
+        # TODO: also detect an MBR other than protective,
+        # and refuse to edit that.
+        return subprocess.check_output(
+            'blkid -p -o value -s PTTYPE --'.split() + [self.devpath]
+        ).rstrip().decode('ascii')
+
+    @memoized_property
+    def parted_device(self):
+        import parted.device
+        return parted.device.Device(self.devpath)
+
+    @memoized_property
+    def ptable(self):
+        return PartitionTable(self)
+
+    def as_partition(self, bdev):
+        return Partition(bdev.devpath, partitioned_device=self)
 
 
 class BlockData:
     def __init__(self, device):
         self.device = device
+
+
+class PartitionTable(BlockData):
+    @memoized_property
+    def parted_disk(self):
+        import parted.disk
+        return parted.disk.Disk(self.device.parted_device)
 
 
 class CantShrink(Exception):
@@ -130,19 +212,17 @@ class Filesystem(BlockData):
     def fssize(self):
         return self.block_size * self.block_count
 
-    @property
+    @memoized_property
     def fslabel(self):
-        self.__dict__['fslabel'] = rv = subprocess.check_output(
+        return subprocess.check_output(
             'blkid -o value -s LABEL --'.split() + [self.device.devpath]
         ).rstrip().decode('ascii')
-        return rv
 
-    @property
+    @memoized_property
     def fsuuid(self):
-        self.__dict__['fsuuid'] = rv = subprocess.check_output(
+        return subprocess.check_output(
             'blkid -o value -s UUID --'.split() + [self.device.devpath]
         ).rstrip().decode('ascii')
-        return rv
 
 
 class SimpleContainer(BlockData):
@@ -180,7 +260,7 @@ class LUKS(SimpleContainer):
             if match and int(match.group('offset')) == self.offset:
                 return hld
 
-    @property
+    @memoized_property
     def cleartext_device(self):
         # If the device is already activated we won't have
         # to prompt for a passphrase.
@@ -189,7 +269,6 @@ class LUKS(SimpleContainer):
             dmname = 'cleartext-{}'.format(uuid.uuid1())
             self.activate(dmname)
             dev = BlockDevice('/dev/mapper/' + dmname)
-        self.__dict__['cleartext_device'] = dev
         return dev
 
     def read_superblock(self):
@@ -571,10 +650,18 @@ def main():
 
 
 def cmd_to_bcache(args):
-    device = Partition(args.device)
+    device = BlockDevice(args.device)
     debug = args.debug
 
-    container = device.open_partition_container()
+    if not device.is_partition():
+        print(
+            'Device {} is not a partition'.format(device.devpath),
+            file=sys.stderr)
+        return 1
+
+    container_device = container_of_partition(device)
+    part1 = container_device.as_partition(device)
+    part0 = part1.prev_partition
 
 
 def cmd_to_lvm(args):
@@ -796,7 +883,7 @@ def cmd_to_lvm(args):
 
     print('Installing LVM metadata... ', end='', flush=True)
     # This had better be atomic
-    # Though technically, only sector writes are guaranteed atomic
+    # Though technically, only physical sector writes are guaranteed atomic
     wr_len = os.pwrite(dev_fd, lvm_data, 0)
     assert wr_len == pe_size
     # read back for the hell of it
