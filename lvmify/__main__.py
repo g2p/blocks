@@ -91,48 +91,12 @@ def ptable_devpath(bdev):
     return os.path.realpath('/dev/block/' + devnum)
 
 
-def container_of_partition(bdev):
-    # The container device isn't a partition table, just the
-    # device where the partition table is stored.
-    return PartitionedDevice(ptable_devpath(bdev))
+def ptable_from_partition_device(bdev):
+    return PartitionTable(PartitionedDevice(ptable_devpath(bdev)))
 
 
-class Partition(BlockDevice):
-    def __init__(self, devpath, partitioned_device):
-        BlockDevice.__init__(self, devpath=devpath)
-        # XXX Stricter verifications that partitioned_device contains devpath
-        self.partitioned_device = partitioned_device
-
-    @property
-    def start(self):
-        # Not memoized, we change it
-        return int(open(self.sysfspath + '/start').read())
-
-    @memoized_property
-    def parted_partition(self):
-        pdisk = self.partitioned_device.ptable.parted_disk
-        return pdisk.getPartitionBySector(self.start)
-
-    @memoized_property
-    def prev_parted_partition(self):
-        # The previous partition, skipping over free space
-        # XXX There is no guarantee this partition has a
-        # device node.
-        import _ped
-        pdisk = self.partitioned_device.ptable.parted_disk
-        rv = pdisk.getPartitionBySector(self.start - 1)
-        if rv.type == _ped.PARTITION_FREESPACE:
-            rv = pdisk.getPartitionBySector(rv.geometry.start - 1)
-            assert rv.type != _ped.PARTITION_FREESPACE
-        return rv
-
-    @memoized_property
-    def prev_partition(self):
-        devpath = self.prev_parted_partition.path
-        if not os.path.exists(devpath):
-            raise UnmappedPartition(
-                self.devpath, self.prev_parted_partition.geometry.start)
-        return Partition(devpath, partitioned_device=self.partitioned_device)
+def start_of_partition(bdev):
+    return int(open(bdev.sysfspath + '/start').read()) * 512
 
 
 class PartitionedDevice(BlockDevice):
@@ -149,17 +113,14 @@ class PartitionedDevice(BlockDevice):
         import parted.device
         return parted.device.Device(self.devpath)
 
-    @memoized_property
-    def ptable(self):
-        return PartitionTable(self)
-
-    def as_partition(self, bdev):
-        return Partition(bdev.devpath, partitioned_device=self)
-
 
 class BlockData:
     def __init__(self, device):
         self.device = device
+
+
+class OverlappingPartition(Exception):
+    pass
 
 
 class PartitionTable(BlockData):
@@ -167,6 +128,62 @@ class PartitionTable(BlockData):
     def parted_disk(self):
         import parted.disk
         return parted.disk.Disk(self.device.parted_device)
+
+    def _iter_range(self, start_sector, end_sector):
+        # Loop on partitions overlapping with the range, excluding free space
+
+        # Careful: end_sector is exclusive here,
+        # but parted geometry uses inclusive ends.
+
+        import _ped
+        while start_sector < end_sector:
+            part = self.parted_disk.getPartitionBySector(start_sector)
+            if not (part.type & _ped.PARTITION_FREESPACE):
+                yield part
+            # inclusive, so add one
+            start_sector = part.geometry.end + 1
+
+    def _reserve_range(self, start, end, progress):
+        # round down
+        start_sector = start // 512
+
+        # round up
+        end_sector = (end - 1) // 512 + 1
+
+        part = None
+        for part in self._iter_range(start_sector, end_sector):
+            if part.geometry.start >= start_sector:
+                err = OverlappingPartition(start, end, part)
+                progress.notify_error(
+                    'The range we want to reserve overlaps with '
+                    'the start of partition {}, the shrinking strategy '
+                    'will not work.'.format(part.path), err)
+                raise err
+
+        if part is None:
+            # No partitions inside the range, we're good
+            return
+
+        # There's a single overlapping partition,
+        # and it starts outside the range. Shrink it.
+
+        part_newsize = (start_sector - part.geometry.start) * 512
+
+        block_stack = get_block_stack(BlockDevice(part.path), progress)
+
+        block_stack.read_superblocks()
+        block_stack.reserve_end_area_verbose(part_newsize, progress)
+
+    def reserve_space_before(self, part_start, length, progress):
+        start_sector, rem = divmod(part_start, 512)
+        assert rem == 0
+
+        # Just check part_start is indeed the start of a partition
+        part = self.parted_disk.getPartitionBySector(start_sector)
+        if part.geometry.start != start_sector:
+            raise KeyError(part_start, self)
+
+        return self._reserve_range(part_start - length, part_start, progress)
 
 
 class CantShrink(Exception):
@@ -575,7 +592,7 @@ class BlockStack:
         for inner_pos, block_data in reversed(list(self.iter_pos(pos))):
             block_data.reserve_end_area_nonrec(inner_pos)
 
-    def reserve_end_area_verbose(self, pos):
+    def reserve_end_area_verbose(self, pos, progress):
         bs = self.topmost.block_size
         inner_pos = ((pos - self.overhead) // bs) * bs
         shrink_size = self.topmost.fssize - inner_pos
@@ -583,16 +600,17 @@ class BlockStack:
 
         if self.topmost.fssize > inner_pos:
             if self.topmost.can_shrink:
-                print(
+                progress.notify(
                     'Will shrink the filesystem ({}) by {} bytes'
                     .format(fstype, shrink_size))
             else:
-                print(
+                err = CantShrink(self.topmost)
+                progress.notify_error(
                     'Can\'t shrink filesystem ({}), but need another {} bytes '
-                    'at the end'.format(fstype, shrink_size))
-                raise CantShrink(self.topmost)
+                    'at the end'.format(fstype, shrink_size), err)
+                raise err
         else:
-            print(
+            progress.notify(
                 'The filesystem ({}) leaves enough room, '
                 'no need to shrink it'.format(fstype))
 
@@ -612,7 +630,7 @@ class BlockStack:
         del self.stack
 
 
-def get_block_stack(device):
+def get_block_stack(device, progress):
     # this cries for a conslist
     stack = []
     while True:
@@ -633,7 +651,11 @@ def get_block_stack(device):
         elif device.superblock_type == 'xfs':
             stack.append(XFS(device))
         else:
-            raise UnsupportedSuperblock(device=device)
+            err = UnsupportedSuperblock(device=device)
+            progress.notify_error(
+                'Unsupported superblock type: {}'
+                .format(err.device.superblock_type), err)
+            raise err
 
         # only reached when we ended on a filesystem
         return BlockStack(stack)
@@ -653,6 +675,27 @@ class ShiftConvertStrategy(ConvertStrategy):
 
 class SyntheticDevice(BlockDevice):
     pass
+
+
+class ProgressListener:
+    pass
+
+
+class CLIProgressHandler(ProgressListener):
+    """A progress listener that prints messages and exits on error.
+    """
+
+    def notify(self, msg):
+        print(msg)
+
+    def notify_error(self, msg, err):
+        """Takes an exception so ProgressListener callers remember to raise it.
+
+        Even though this implementation won't return, others would.
+        """
+
+        print(msg, file=sys.stderr)
+        sys.exit(2)
 
 
 @contextlib.contextmanager
@@ -738,32 +781,18 @@ def cmd_to_bcache(args):
             file=sys.stderr)
         return 1
 
-    container_device = container_of_partition(device)
-    part1 = container_device.as_partition(device)
-    part0 = part1.prev_partition
-
-    try:
-        block_stack = get_block_stack(part0)
-    except UnsupportedSuperblock as err:
-        print(
-            'Unsupported superblock type: {}'
-            .format(err.device.superblock_type), file=sys.stderr)
-        return 1
-
-    # TODO: use make-bcache with custom alignment so that
+    # TODO: use make-bcache with a custom sb_size so that
     # we can keep the partition-start alignment.
     # Alignment inside the bdev doesn't change, but some partitioning
     # tools (like parted) autodetect ptable alignment from start
     # sectors and it would be bad to break that.
     sb_size = 512 * 16
-    part0_newsize = part0.size - sb_size
 
-    block_stack.read_superblocks()
-    try:
-        block_stack.reserve_end_area_verbose(part0_newsize)
-    except CantShrink as err:
-        # reserve_end_area_verbose has already printed an explanation
-        return 1
+    progress = CLIProgressHandler()
+    ptable = ptable_from_partition_device(device)
+    part_start = start_of_partition(device)
+    ptable.reserve_space_before(part_start, sb_size, progress)
+    part_start1 = part_start - sb_size
 
     # Make a synthetic backing device
     with synth_device(sb_size, device.size) as synth_bdev:
@@ -773,13 +802,15 @@ def cmd_to_bcache(args):
         bcache_backing.read_superblock()
         assert bcache_backing.offset == sb_size
 
-    dev_fd = os.open(part0.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    # Let's scribble on the partitioned device directly
+    dev_fd = os.open(ptable.device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
 
     print('Copying the bcache superblock... ', end='', flush=True)
-    wr_len = os.pwrite(dev_fd, synth_bdev.data, part0_newsize)
+    assert len(synth_bdev.data) == sb_size
+    wr_len = os.pwrite(dev_fd, synth_bdev.data, part_start1)
     assert wr_len == sb_size
     # read back for the hell of it
-    assert os.pread(dev_fd, sb_size, part0_newsize) == synth_bdev.data
+    assert os.pread(dev_fd, sb_size, part_start1) == synth_bdev.data
     print('ok')
 
 
@@ -803,13 +834,9 @@ def cmd_to_lvm(args):
             'Already a physical volume', file=sys.stderr)
         return 1
 
-    try:
-        block_stack = get_block_stack(device)
-    except UnsupportedSuperblock as err:
-        print(
-            'Unsupported superblock type: {}'
-            .format(err.device.superblock_type), file=sys.stderr)
-        return 1
+    progress = CLIProgressHandler()
+
+    block_stack = get_block_stack(device, progress)
 
     if block_stack.fslabel:
         lvname = block_stack.fslabel
@@ -831,11 +858,7 @@ def cmd_to_lvm(args):
             .format(pe_size, pe_newpos, device.size))
 
     block_stack.read_superblocks()
-    try:
-        block_stack.reserve_end_area_verbose(pe_newpos)
-    except CantShrink as err:
-        # reserve_end_area_verbose has already printed an explanation
-        return 1
+    block_stack.reserve_end_area_verbose(pe_newpos, progress)
 
     fsuuid = block_stack.topmost.fsuuid
     block_stack.deactivate()
