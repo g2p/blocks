@@ -631,6 +631,65 @@ class ShiftConvertStrategy(ConvertStrategy):
     pass
 
 
+class SyntheticDevice(BlockDevice):
+    pass
+
+
+@contextlib.contextmanager
+def synth_device(writable_size, rozeros_size):
+    assert writable_size % 512 == 0
+    assert rozeros_size % 512 == 0
+
+    writable_sectors = writable_size // 512
+    rz_sectors = rozeros_size // 512
+
+    with contextlib.ExitStack() as st:
+        imgf = st.enter_context(tempfile.NamedTemporaryFile(suffix='.img'))
+        imgf.truncate(writable_size)
+
+        lo_dev = subprocess.check_output(
+            'losetup -f --show --'.split() + [imgf.name]
+        ).rstrip().decode('ascii')
+        st.callback(lambda:
+            quiet_call('losetup -d --'.split() + [lo_dev]))
+        rozeros_devname = 'rozeros-{}'.format(uuid.uuid1())
+        synth_devname = 'synthetic-{}'.format(uuid.uuid1())
+        synth_devpath = '/dev/mapper/' + synth_devname
+
+        # The readonly flag is ignored when stacked under a linear
+        # target, so the use of an intermediate device does not bring
+        # the expected benefit. This forces us to use the 'error'
+        # target to catch writes that are out of bounds.
+        # LVM will ignore read errors in the discovery phase (we hide
+        # the output), and will fail on write errors appropriately.
+        mk_dm(
+            rozeros_devname,
+            '0 {rz_sectors} error\n'
+            .format(
+                rz_sectors=rz_sectors),
+            readonly=True,
+            exit_stack=st)
+        mk_dm(
+            synth_devname,
+            '0 {writable_sectors} linear {lo_dev} 0\n'
+            '{writable_sectors} {rz_sectors} linear {rozeros_devpath} 0\n'
+            .format(
+                writable_sectors=writable_sectors, lo_dev=lo_dev,
+                rz_sectors=rz_sectors,
+                rozeros_devpath='/dev/mapper/' + rozeros_devname),
+            readonly=False,
+            exit_stack=st)
+
+        synth = SyntheticDevice(synth_devpath)
+        yield synth
+
+        data = imgf.read()
+        assert len(data) == writable_size
+
+        # Expose the data outside of the with statement
+        synth.data = data
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
@@ -662,6 +721,14 @@ def cmd_to_bcache(args):
     container_device = container_of_partition(device)
     part1 = container_device.as_partition(device)
     part0 = part1.prev_partition
+
+    try:
+        block_stack = get_block_stack(part0)
+    except UnsupportedSuperblock as err:
+        print(
+            'Unsupported superblock type: {}'
+            .format(err.device.superblock_type), file=sys.stderr)
+        return 1
 
 
 def cmd_to_lvm(args):
@@ -745,26 +812,16 @@ def cmd_to_lvm(args):
 
     # Create a virtual device to do the lvm setup
     with contextlib.ExitStack() as st:
-        imgf = st.enter_context(tempfile.NamedTemporaryFile(
-            suffix='.pvimg', delete=not debug))
-        imgf.truncate(pe_size)
-
+        synth_pv = st.enter_context(
+            synth_device(pe_size, device.size - pe_size))
         cfgf = st.enter_context(
             tempfile.NamedTemporaryFile(
                 suffix='.vgcfg', mode='w', encoding='ascii',
                 delete=not debug))
 
-        lo_dev = subprocess.check_output(
-            'losetup -f --show --'.split() + [imgf.name]
-        ).rstrip().decode('ascii')
-        st.callback(lambda:
-            quiet_call('losetup -d --'.split() + [lo_dev]))
         pv_uuid = uuid.uuid1()
         vg_uuid = uuid.uuid1()
         lv_uuid = uuid.uuid1()
-        rozeros_devname = 'rozeros-{}'.format(uuid.uuid1())
-        synth_devname = 'synthetic-{}'.format(uuid.uuid1())
-        synth_devpath = '/dev/mapper/' + synth_devname
 
         lvmcfgdir = st.enter_context(
             tempfile.TemporaryDirectory(suffix='.lvmconf'))
@@ -772,7 +829,7 @@ def cmd_to_lvm(args):
         with open(os.path.join(lvmcfgdir, 'lvm.conf'), 'w') as conffile:
             conffile.write(
                'devices {{ filter=["a/^{synth_re}$/", "r/.*/"] }}'
-                .format(synth_re=re.escape(synth_devpath)))
+                .format(synth_re=re.escape(synth_pv.devpath)))
 
         cfgf.write(textwrap.dedent(
             '''
@@ -835,30 +892,6 @@ def cmd_to_lvm(args):
             )))
         cfgf.flush()
 
-        # The readonly flag is ignored when stacked under a linear
-        # target, so the use of an intermediate device does not bring
-        # the expected benefit. This forces us to use the 'error'
-        # target to catch writes that are out of bounds.
-        # LVM will ignore read errors in the discovery phase (we hide
-        # the output), and will fail on write errors appropriately.
-        mk_dm(
-            rozeros_devname,
-            '0 {extra_sectors} error\n'
-            .format(
-                extra_sectors=(device.size - pe_size) // 512),
-            readonly=True,
-            exit_stack=st)
-        mk_dm(
-            synth_devname,
-            '0 {pe_sectors} linear {lo_dev} 0\n'
-            '{pe_sectors} {extra_sectors} linear {rozeros_devpath} 0\n'
-            .format(
-                pe_sectors=pe_sectors, lo_dev=lo_dev,
-                extra_sectors=(device.size - pe_size) // 512,
-                rozeros_devpath='/dev/mapper/' + rozeros_devname),
-            readonly=False,
-            exit_stack=st)
-
         # Prevent the next too commands from scanning every device (slow),
         # we already know lvm should write only to the synthetic pv.
         st.enter_context(setenv('LVM_SYSTEM_DIR', lvmcfgdir))
@@ -866,12 +899,9 @@ def cmd_to_lvm(args):
         quiet_call(
             ['pvcreate', '--restorefile', cfgf.name,
              '--uuid', str(pv_uuid), '--zero', 'y', '--',
-             synth_devpath])
+             synth_pv.devpath])
         quiet_call(
             ['vgcfgrestore', '--file', cfgf.name, '--', vgname])
-
-        lvm_data = imgf.read()
-        assert len(lvm_data) == pe_size
     print('ok')  # after 'Preparing LVM metadata'
 
     # Recovery: copy back the PE we had moved to the end of the device.
@@ -884,10 +914,10 @@ def cmd_to_lvm(args):
     print('Installing LVM metadata... ', end='', flush=True)
     # This had better be atomic
     # Though technically, only physical sector writes are guaranteed atomic
-    wr_len = os.pwrite(dev_fd, lvm_data, 0)
+    wr_len = os.pwrite(dev_fd, synth_pv.data, 0)
     assert wr_len == pe_size
     # read back for the hell of it
-    assert os.pread(dev_fd, pe_size, 0) == lvm_data
+    assert os.pread(dev_fd, pe_size, 0) == synth_pv.data
     print('ok')
     print('LVM conversion successful!')
     if False:
