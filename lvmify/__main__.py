@@ -27,6 +27,12 @@ dm_crypt_re = re.compile(
     re.ASCII)
 
 
+def bytes_to_sector(by):
+    sectors, rem = divmod(by, 512)
+    assert rem == 0
+    return sectors
+
+
 # SQLa, compatible license
 class memoized_property(object):
     """A read-only @property that is only evaluated once."""
@@ -185,6 +191,36 @@ class PartitionTable(BlockData):
 
         return self._reserve_range(part_start - length, part_start, progress)
 
+    def shift_left(self, part_start, part_start1):
+        assert part_start1 < part_start
+        start_sector = bytes_to_sector(part_start)
+        start_sector1 = bytes_to_sector(part_start1)
+
+        import parted.geometry
+        import parted.constraint
+
+        left_part = self.parted_disk.getPartitionBySector(start_sector1)
+        right_part = self.parted_disk.getPartitionBySector(start_sector)
+
+        geom = parted.geometry.Geometry(
+            device=self.device.parted_device,
+            start=left_part.geometry.start,
+            end=start_sector1 - 1)
+        cons = parted.Constraint(exactGeom=geom)
+        assert self.parted_disk.setPartitionGeometry(
+            left_part, cons, geom.start, geom.end) == True
+
+        geom = parted.geometry.Geometry(
+            device=self.device.parted_device,
+            start=start_sector1,
+            end=right_part.geometry.end)
+        cons = parted.Constraint(exactGeom=geom)
+        assert self.parted_disk.setPartitionGeometry(
+            right_part, cons, geom.start, geom.end) == True
+
+        # commitToDevice (atomic) + commitToOS (not atomic, less important)
+        self.parted_disk.commit()
+
 
 class CantShrink(Exception):
     pass
@@ -321,8 +357,7 @@ class LUKS(SimpleContainer):
         self._superblock_read = True
 
     def reserve_end_area_nonrec(self, pos):
-        sectors, rem = divmod(pos, 512)
-        assert rem == 0
+        sectors = bytes_to_sector(pos)
         # pycryptsetup is useless, no resize support
         # otoh, size doesn't appear in the superblock,
         # and updating the dm table is only useful if
@@ -700,11 +735,8 @@ class CLIProgressHandler(ProgressListener):
 
 @contextlib.contextmanager
 def synth_device(writable_size, rozeros_size):
-    assert writable_size % 512 == 0
-    assert rozeros_size % 512 == 0
-
-    writable_sectors = writable_size // 512
-    rz_sectors = rozeros_size // 512
+    writable_sectors = bytes_to_sector(writable_size)
+    rz_sectors = bytes_to_sector(rozeros_size)
 
     with contextlib.ExitStack() as st:
         imgf = st.enter_context(tempfile.NamedTemporaryFile(suffix='.img'))
@@ -788,6 +820,9 @@ def cmd_to_bcache(args):
     # sectors and it would be bad to break that.
     sb_size = 512 * 16
 
+    # So that part_start1 is sector-aligned
+    assert sb_size % 512 == 0
+
     progress = CLIProgressHandler()
     ptable = ptable_from_partition_device(device)
     part_start = start_of_partition(device)
@@ -802,15 +837,35 @@ def cmd_to_bcache(args):
         bcache_backing.read_superblock()
         assert bcache_backing.offset == sb_size
 
-    # Let's scribble on the partitioned device directly
-    dev_fd = os.open(ptable.device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    import _ped
+    write_part = ptable.parted_disk.getPartitionBySector(part_start1 // 512)
+    if write_part.type != _ped.PARTITION_NORMAL:
+        # Free space, or something else we can't touch
+        print('Can\'t write outside of a partition', file=sys.stderr)
+        return 1
+
+    sb_write_offset = part_start1 - (512 * write_part.geometry.start)
+
+    dev_fd = os.open(write_part.path, os.O_SYNC|os.O_RDWR|os.O_EXCL)
 
     print('Copying the bcache superblock... ', end='', flush=True)
     assert len(synth_bdev.data) == sb_size
-    wr_len = os.pwrite(dev_fd, synth_bdev.data, part_start1)
+    wr_len = os.pwrite(dev_fd, synth_bdev.data, sb_write_offset)
     assert wr_len == sb_size
     # read back for the hell of it
-    assert os.pread(dev_fd, sb_size, part_start1) == synth_bdev.data
+    assert os.pread(dev_fd, sb_size, sb_write_offset) == synth_bdev.data
+    os.close(dev_fd)
+    del dev_fd
+    print('ok')
+
+    # Check the partition we're about to convert isn't in use either,
+    # otherwise the partition table couldn't be reloaded.
+    dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    os.close(dev_fd)
+    del dev_fd
+
+    print('Modifying the partition table... ', end='', flush=True)
+    ptable.shift_left(part_start, part_start1)
     print('ok')
 
 
@@ -845,8 +900,7 @@ def cmd_to_lvm(args):
     assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname)
 
     pe_size = LVM_PE
-    assert pe_size % 512 == 0
-    pe_sectors = pe_size // 512
+    pe_sectors = bytes_to_sector(pe_size)
     # -1 because we reserve pe_size for the lvm label and one metadata area
     pe_count = device.size // pe_size - 1
     # The position of the moved pe
