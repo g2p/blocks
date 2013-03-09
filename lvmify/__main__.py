@@ -228,7 +228,23 @@ class Filesystem(BlockData):
 class SimpleContainer(BlockData):
     # A single block device that wraps a single block device
     # (luks is one, but not lvm, lvm is m2m)
-    pass
+
+    offset = None
+
+
+class BCacheBacking(SimpleContainer):
+    def read_superblock(self):
+        self.offset = None
+
+        proc = subprocess.Popen(
+            ['bcache-super-show', '--', self.device.devpath],
+            stdout=subprocess.PIPE)
+        for line in proc.stdout:
+            if line.startswith(b'dev.data.first_sector'):
+                line = line.decode('ascii')
+                self.offset = int(line.split(maxsplit=1)[1]) * 512
+        proc.wait()
+        assert proc.returncode == 0
 
 
 class LUKS(SimpleContainer):
@@ -450,7 +466,11 @@ class ExtFS(Filesystem):
                 self.state = line.split(':', 1)[1].strip()
             elif line.startswith(b'Last mount time:'):
                 line = line.decode('ascii')
-                self.mount_tm = time.strptime(line.split(':', 1)[1].strip())
+                date = line.split(':', 1)[1].strip()
+                if date == 'n/a':
+                    self.mount_tm = time.gmtime(0)
+                else:
+                    self.mount_tm = time.strptime(date)
             elif line.startswith(b'Last checked:'):
                 line = line.decode('ascii')
                 self.check_tm = time.strptime(line.split(':', 1)[1].strip())
@@ -729,6 +749,38 @@ def cmd_to_bcache(args):
             'Unsupported superblock type: {}'
             .format(err.device.superblock_type), file=sys.stderr)
         return 1
+
+    # TODO: use make-bcache with custom alignment so that
+    # we can keep the partition-start alignment.
+    # Alignment inside the bdev doesn't change, but some partitioning
+    # tools (like parted) autodetect ptable alignment from start
+    # sectors and it would be bad to break that.
+    sb_size = 512 * 16
+    part0_newsize = part0.size - sb_size
+
+    block_stack.read_superblocks()
+    try:
+        block_stack.reserve_end_area_verbose(part0_newsize)
+    except CantShrink as err:
+        # reserve_end_area_verbose has already printed an explanation
+        return 1
+
+    # Make a synthetic backing device
+    with synth_device(sb_size, device.size) as synth_bdev:
+        quiet_call(
+            ['make-bcache', '--bdev', synth_bdev.devpath])
+        bcache_backing = BCacheBacking(synth_bdev)
+        bcache_backing.read_superblock()
+        assert bcache_backing.offset == sb_size
+
+    dev_fd = os.open(part0.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+
+    print('Copying the bcache superblock... ', end='', flush=True)
+    wr_len = os.pwrite(dev_fd, synth_bdev.data, part0_newsize)
+    assert wr_len == sb_size
+    # read back for the hell of it
+    assert os.pread(dev_fd, sb_size, part0_newsize) == synth_bdev.data
+    print('ok')
 
 
 def cmd_to_lvm(args):
