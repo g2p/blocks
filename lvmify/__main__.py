@@ -62,6 +62,13 @@ class BlockDevice:
         ).rstrip().decode('ascii')
 
     @memoized_property
+    def has_bcache_superblock(self):
+        # blkid doesn't detect bcache, so special-case it.
+        # Exit status is always 0, check if there is output
+        return bool(subprocess.check_output(
+            ['probe-bcache', '--', self.devpath]))
+
+    @memoized_property
     def size(self):
         rv = int(subprocess.check_output(
             'blockdev --getsize64'.split() + [self.devpath]))
@@ -85,12 +92,13 @@ class BlockDevice:
             'dmsetup table --'.split() + [self.devpath],
             universal_newlines=True)
 
+    @memoized_property
     def is_partition(self):
         return os.path.exists(self.sysfspath + '/start')
 
 
 def ptable_devpath(bdev):
-    assert bdev.is_partition()
+    assert bdev.is_partition
 
     with open(bdev.sysfspath + '/../dev') as fi:
         devnum = fi.read().rstrip()
@@ -810,7 +818,13 @@ def cmd_to_bcache(args):
     device = BlockDevice(args.device)
     debug = args.debug
 
-    if not device.is_partition():
+    if device.has_bcache_superblock:
+        print(
+            'Device {} already has a bcache super block.'
+            .format(device.devpath), file=sys.stderr)
+        return 1
+
+    if not device.is_partition:
         print(
             'Device {} is not a partition'.format(device.devpath),
             file=sys.stderr)
