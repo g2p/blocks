@@ -457,8 +457,11 @@ class BtrFS(Filesystem):
 
     def _resize(self, target_size):
         assert target_size % self.block_size == 0
-        # XXX It seems the device is still unavailable
+        # XXX The device is unavailable (EBUSY)
         # immediately after unmounting.
+        # Bug introduced in Linux 3.0, fixed in 3.9.
+        # Tracked down by Eric Sandeen in
+        # http://comments.gmane.org/gmane.comp.file-systems.btrfs/23987
         quiet_call(
             'btrfs filesystem resize'.split()
             + ['{}:{}'.format(self.devid, target_size), self.mpoint])
