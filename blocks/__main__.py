@@ -810,8 +810,93 @@ def main():
     sp_to_bcache.add_argument('device')
     sp_to_bcache.set_defaults(action=cmd_to_bcache)
 
+    sp_lv_to_gpt = commands.add_parser(
+        'lv-to-gpt',
+        help='Insert a partition table at the start of a logical volume')
+    sp_lv_to_gpt.add_argument('device')
+    sp_lv_to_gpt.set_defaults(action=cmd_lv_to_gpt)
+
     args = parser.parse_args()
     return args.action(args)
+
+
+def cmd_lv_to_gpt(args):
+    import augeas
+    device = BlockDevice(args.device)
+    debug = args.debug
+
+    # XXX Will give bogus results if it's a vg path instead of an lv path
+    # Single-lv vg works by chance, but don't commit to it.
+    lv_info = subprocess.check_output(
+        'lvs --noheadings --rows -o vg_name,vg_uuid,lv_name,lv_uuid --'.split()
+        + [device.devpath], universal_newlines=True).splitlines()
+    vgname, vg_uuid, lvname, lv_uuid = (fi.lstrip() for fi in lv_info)
+
+    with tempfile.TemporaryDirectory(suffix='.blocks') as tdname:
+        vgcfgname = tdname + '/vg.cfg'
+        quiet_call(
+            ['vgcfgbackup', '--file', vgcfgname, '--', vgname])
+        # XXX expand loadpath on install
+        aug = augeas.Augeas(
+            loadpath='augeas', root='/dev/null',
+            flags=augeas.Augeas.NO_MODL_AUTOLOAD | augeas.Augeas.SAVE_NEWFILE)
+        vgcfg = open(vgcfgname)
+        aug.set('/raw/vgcfg', vgcfg.read())
+
+        aug.text_store('LVM.lns', '/raw/vgcfg', '/vg')
+
+        # There is no easy way to quote for XPath, so whitelist
+        assert all(ch in ASCII_ALNUM_WHITELIST for ch in vgname), vgname
+        assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname), lvname
+
+        aug.defvar('vg', '/vg/{}/dict'.format(vgname))
+        assert aug.get('$vg/id/str') == vg_uuid
+        aug.defvar('lv', '$vg/logical_volumes/dict/{}/dict'.format(lvname))
+        assert aug.get('$lv/id/str') == lv_uuid
+        segment_count = int(aug.get('$lv/segment_count/int'))
+
+        # checking all segments are linear
+        for i in range(1, segment_count + 1):
+            assert aug.get(
+                '$lv/segment{}/dict/type/str'.format(i)) == 'striped'
+            assert int(aug.get(
+                '$lv/segment{}/dict/stripe_count/int'.format(i))) == 1
+
+        # shifting segments
+        aug.set('$lv/segment_count/int', '%d' % (segment_count + 1))
+        for i in range(segment_count, 0, -1):
+            aug.set(
+                '$lv/segment{}/dict/start_extent/int'.format(i),
+                '%d' % (int(aug.get(
+                    '$lv/segment{}/dict/start_extent/int'.format(i))) + 1))
+            aug.rename('$lv/segment{}'.format(i), 'segment{}'.format(i + 1))
+
+        aug.defvar('last', '$lv/segment{}/dict'.format(i + 1))
+
+        # shrinking last segment by one PE
+        last_count = int(aug.get('$last/extent_count/int'))
+        last_count -= 1
+        aug.set('$last/extent_count/int', '%d' % last_count)
+
+        # inserting new segment at the beginning
+        aug.insert('$lv/segment2', 'segment1')
+        aug.set('$lv/segment1/dict/start_extent/int', '%d' % 0)
+        aug.set('$lv/segment1/dict/extent_count/int', '%d' % 1)
+        aug.set('$lv/segment1/dict/type/str', 'striped')
+        aug.set('$lv/segment1/dict/stripe_count/int', '%d' % 1)
+        # repossessing the last segment's last PE
+        aug.set(
+            '$lv/segment1/dict/stripes/list/1/str',
+            aug.get('$last/stripes/list/1/str'))
+        aug.set(
+            '$lv/segment1/dict/stripes/list/2/int',
+            '%d' % (int(aug.get('$last/stripes/list/2/int')) + last_count))
+
+        aug.text_retrieve('LVM.lns', '/raw/vgcfg', '/vg', '/raw/vgcfg.new')
+        open(vgcfgname + '.new', 'w').write(aug.get('/raw/vgcfg.new'))
+        subprocess.call(
+            ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
+             vgcfgname, vgcfgname + '.new'])
 
 
 def cmd_to_bcache(args):
