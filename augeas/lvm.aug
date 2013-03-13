@@ -3,7 +3,7 @@ module LVM =
 
 	(* See lvm2/libdm/libdm-config.c for tokenisation;
 	 * libdm uses a blacklist but I prefer the safer whitelist approach. *)
-	let identifier = /[a-zA-Z0-9_]+/
+	let identifier = /[a-zA-Z0-9_-]+/
 	let comment = Util.comment
 
 	(* strings can contain backslash-escaped dquotes, but I don't know
