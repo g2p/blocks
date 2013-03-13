@@ -4,7 +4,6 @@ module LVM =
 	(* See lvm2/libdm/libdm-config.c for tokenisation;
 	 * libdm uses a blacklist but I prefer the safer whitelist approach. *)
 	let identifier = /[a-zA-Z0-9_-]+/
-	let comment = Util.comment
 
 	(* strings can contain backslash-escaped dquotes, but I don't know
 	 * how to get the message across to augeas *)
@@ -22,24 +21,20 @@ module LVM =
 
 	let val = flat_literal | list
 
-	let assignment = [
-		  label "assign"
-		. Util.indent
-		. Build.key_value_line_comment identifier Sep.space_equal val comment]
-
-	let nonblock =
+	let nondef =
 		  Util.empty
-		| comment
-		| assignment
+		| Util.comment
 
 	(* Build.block couldn't be reused, because of recursion and
 	 * a different philosophy of whitespace handling. *)
-	let rec block = [label "block" . [
-		  Util.indent . key identifier . Sep.opt_space . Util.del_str "{\n"
-		.(nonblock | block)*
-		. Util.indent . Util.del_str "}\n"]]
+	let rec def = [
+		  Util.indent . key identifier . (
+			   del /[ \t]*\{\n/ " {\n"
+			  .[label "dict".(nondef | def)*]
+			  . Util.indent . Util.del_str "}\n"
+			  |Sep.space_equal . val . Util.comment_or_eol)]
 
-	let lns = (nonblock | block)*
+	let lns = (nondef | def)*
 
 	let filter =
 		  incl "/etc/lvm/archive/*.vg"
