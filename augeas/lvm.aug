@@ -6,26 +6,21 @@ module LVM =
 	let identifier = /[a-zA-Z0-9_]+/
 	let comment = Util.comment
 
-	let comma = del /,[ \t]*/ ", "
-
 	(* strings can contain backslash-escaped dquotes, but I don't know
 	 * how to get the message across to augeas *)
 	let str = [label "str". Quote.do_dquote (store /[^"]*/)]
 	let int = [label "int". store Rx.integer]
+	let flat_literal = int|str
 
-	let strlist = [
-		  label "strlist"
-		. Util.del_str "["
-		.([seq "strlist" . str . comma]* . [seq "strlist" . str])?
+	(* allow multiline and mixed int/str, used for raids and stripes *)
+	let list = [
+		  label "list" . counter "list"
+		. del /\[[ \t\n]*/ "["
+		.([seq "list". flat_literal . del /,[ \t\n]*/ ", "]*
+				. [seq "list". flat_literal . del /[ \t\n]*/ ""])?
 		. Util.del_str "]"]
 
-	let stripelist = [
-		  label "stripelist"
-		. Util.del_str "[\n"
-		.(Util.indent . str . comma . int . Util.del_str "\n")+
-		. Util.indent . Util.del_str "]"]
-
-	let val = str | int | strlist | stripelist
+	let val = flat_literal | list
 
 	let assignment = [
 		  label "assign"
