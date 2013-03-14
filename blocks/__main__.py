@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import os
 import re
+import stat
 import string
 import subprocess
 import sys
@@ -23,6 +24,11 @@ ASCII_ALNUM_WHITELIST = string.ascii_letters + string.digits
 # Fairly strict, snooping an incorrect mapping would be bad
 dm_crypt_re = re.compile(
     r'^0 (?P<plainsize>\d+) crypt (?P<cipher>[a-z0-9-]+) 0+ 0'
+    ' (?P<major>\d+):(?P<minor>\d+) (?P<offset>\d+)\n$',
+    re.ASCII)
+
+dm_kpartx_re = re.compile(
+    r'^0 (?P<partsize>\d+) linear'
     ' (?P<major>\d+):(?P<minor>\d+) (?P<offset>\d+)\n$',
     re.ASCII)
 
@@ -53,6 +59,7 @@ class memoized_property(object):
 
 class BlockDevice:
     def __init__(self, devpath):
+        assert os.path.exists(devpath)
         self.devpath = devpath
 
     @memoized_property
@@ -87,11 +94,11 @@ class BlockDevice:
 
     @property
     def sysfspath(self):
-        # XXX Only works on /dev/sd?? style
-        di, ba = os.path.split(self.devpath)
-        assert di == '/dev'  # or realpath but yagni
-        assert ba
-        return '/sys/class/block/' + ba
+        # pyudev would also work
+        st = os.stat(self.devpath)
+        assert stat.S_ISBLK(st.st_mode)
+        return '/sys/dev/block/%d:%d' % (
+            os.major(st.st_rdev), os.minor(st.st_rdev))
 
     def iter_holders(self):
         for hld in os.listdir(self.sysfspath + '/holders'):
@@ -102,22 +109,59 @@ class BlockDevice:
             'dmsetup table --'.split() + [self.devpath],
             universal_newlines=True)
 
+    def dm_deactivate(self):
+        return quiet_call(
+            'dmsetup remove --'.split() + [self.devpath])
+
+    def dm_setup(self, table, readonly):
+        cmd = 'dmsetup create --'.split() + [self.devpath]
+        if readonly:
+            cmd[2:2] = ['--readonly']
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        proc.communicate(table.encode('ascii'))
+        assert proc.returncode == 0
+
     @memoized_property
     def is_partition(self):
         return os.path.exists(self.sysfspath + '/start')
 
+    @memoized_property
+    def part_start(self):
+        return int(open(self.sysfspath + '/start').read()) * 512
 
-def ptable_devpath(bdev):
-    assert bdev.is_partition
+    @memoized_property
+    def ptable_sysfspath(self):
+        return self.sysfspath + '/..'
 
-    with open(bdev.sysfspath + '/../dev') as fi:
-        devnum = fi.read().rstrip()
-    return os.path.realpath('/dev/block/' + devnum)
+    @memoized_property
+    def ptable_devpath(self):
+        assert self.is_partition
+
+        with open(self.ptable_sysfspath + '/dev') as fi:
+            devnum = fi.read().rstrip()
+        return os.path.realpath('/dev/block/' + devnum)
 
 
+class DMPartition(BlockDevice):
+    # A kpartx-style partition
+    def __init__(self, devpath):
+        super(DMPartition, self).__init__(devpath=devpath)
+        match = dm_kpartx_re.match(self.dm_table())
+        assert match, repr(self.dm_table())
+        self.ptable_sysfspath = (
+            '/sys/dev/block/{major}:{minor}'.format(**match.groupdict()))
+        self.part_start = int(match.group('offset')) * 512
+        self.is_partition = True
 
-def start_of_partition(bdev):
-    return int(open(bdev.sysfspath + '/start').read()) * 512
+    @classmethod
+    def kpartx_singleton(cls, parent):
+        out = subprocess.check_output(
+            'kpartx -avr --'.split() + [parent.devpath]
+        ).decode('ascii').splitlines()
+        assert len(out) == 1
+        out, = out
+        dmname = out.replace('add map ', '').split()[0]
+        return cls('/dev/mapper/' + dmname)
 
 
 class PartitionedDevice(BlockDevice):
@@ -142,10 +186,10 @@ class PartitionTable(BlockData):
         self.parted_disk = parted_disk
 
     @classmethod
-    def from_partition_device(partition_device):
+    def from_partition_device(cls, partition_device):
         # the ptable that contains a partition
         import parted.disk
-        ptable_device = PartitionedDevice(ptable_devpath(partition_device))
+        ptable_device = PartitionedDevice(partition_device.ptable_devpath)
         return cls(
             device=ptable_device,
             parted_disk=parted.disk.Disk(ptable_device.parted_device))
@@ -221,17 +265,19 @@ class PartitionTable(BlockData):
 
         import parted.geometry
         import parted.constraint
+        import _ped
 
         left_part = self.parted_disk.getPartitionBySector(start_sector1)
         right_part = self.parted_disk.getPartitionBySector(start_sector)
 
-        geom = parted.geometry.Geometry(
-            device=self.device.parted_device,
-            start=left_part.geometry.start,
-            end=start_sector1 - 1)
-        cons = parted.constraint.Constraint(exactGeom=geom)
-        assert self.parted_disk.setPartitionGeometry(
-            left_part, cons, geom.start, geom.end) == True
+        if left_part.type != _ped.PARTITION_FREESPACE:
+            geom = parted.geometry.Geometry(
+                device=self.device.parted_device,
+                start=left_part.geometry.start,
+                end=start_sector1 - 1)
+            cons = parted.constraint.Constraint(exactGeom=geom)
+            assert self.parted_disk.setPartitionGeometry(
+                left_part, cons, geom.start, geom.end) == True
 
         geom = parted.geometry.Geometry(
             device=self.device.parted_device,
@@ -838,12 +884,22 @@ def main():
     parser.add_argument('--debug', action='store_true')
     commands = parser.add_subparsers(dest='command', metavar='command')
 
-    sp_to_lvm = commands.add_parser('to-lvm', help='Convert to LVM')
+    sp_to_lvm = commands.add_parser(
+        'to-lvm',
+        help='Convert to LVM')
     sp_to_lvm.add_argument('device')
     sp_to_lvm.add_argument('--vg-name', dest='vgname', type=str)
     sp_to_lvm.set_defaults(action=cmd_to_lvm)
 
-    sp_to_bcache = commands.add_parser('to-bcache', help='Convert to LVM')
+    sp_lv_to_bcache = commands.add_parser(
+        'lv-to-bcache',
+        help='Convert a logical volume to a bcache backing device')
+    sp_lv_to_bcache.add_argument('device')
+    sp_lv_to_bcache.set_defaults(action=cmd_lv_to_bcache)
+
+    sp_to_bcache = commands.add_parser(
+        'to-bcache',
+        help='Convert a partition to a bcache backing device')
     sp_to_bcache.add_argument('device')
     sp_to_bcache.set_defaults(action=cmd_to_bcache)
 
@@ -857,12 +913,24 @@ def main():
     return args.action(args)
 
 
+def cmd_lv_to_bcache(args):
+    device = BlockDevice(args.device)
+    debug = args.debug
+    rv = lv_to_gpt(device, debug)
+    if rv:
+        return rv
+    device1 = DMPartition.kpartx_singleton(device)
+    return to_bcache(device1, debug)
+
+
 def cmd_lv_to_gpt(args):
+    return lv_to_gpt(device=BlockDevice(args.device), debug=args.debug)
+
+
+def lv_to_gpt(device, debug):
     import augeas
     import parted
     import _ped
-    device = BlockDevice(args.device)
-    debug = args.debug
 
     if device.ptable_type is not None:
         print(
@@ -994,9 +1062,10 @@ def cmd_lv_to_gpt(args):
 
 
 def cmd_to_bcache(args):
-    device = BlockDevice(args.device)
-    debug = args.debug
+    return to_bcache(device=BlockDevice(args.device), debug=args.debug)
 
+
+def to_bcache(device, debug):
     if device.has_bcache_superblock:
         print(
             'Device {} already has a bcache super block.'
@@ -1021,7 +1090,7 @@ def cmd_to_bcache(args):
 
     progress = CLIProgressHandler()
     ptable = PartitionTable.from_partition_device(device)
-    part_start = start_of_partition(device)
+    part_start = device.part_start
     ptable.reserve_space_before(part_start, sb_size, progress)
     part_start1 = part_start - sb_size
 
@@ -1035,26 +1104,40 @@ def cmd_to_bcache(args):
 
     import _ped
     write_part = ptable.parted_disk.getPartitionBySector(part_start1 // 512)
-    if write_part.type != _ped.PARTITION_NORMAL:
+    deactivated = False
+
+    if write_part.type == _ped.PARTITION_NORMAL:
+        write_offset = part_start1 - (512 * write_part.geometry.start)
+        dev_fd = os.open(write_part.path, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    elif write_part.type == _ped.PARTITION_FREESPACE:
+        # XXX Writing into the parent device doesn't work if it is mapped (EBUSY),
+        # so try to tear down a DMPartition.
+        # Or maybe try ped_device_write / ped_geometry_write?
+        if device.dm_table():
+            device.dm_deactivate()
+            deactivated = True
+        dev_fd = os.open(ptable.device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+        write_offset = part_start1
+    else:
         # Free space, or something else we can't touch
-        print('Can\'t write outside of a partition', file=sys.stderr)
+        print(
+            'Can\'t write outside of a normal partition (marked {})'
+            .format(_ped.partition_type_get_name(write_part.type)),
+            file=sys.stderr)
         return 1
 
-    sb_write_offset = part_start1 - (512 * write_part.geometry.start)
-
-    dev_fd = os.open(write_part.path, os.O_SYNC|os.O_RDWR|os.O_EXCL)
-
     print('Copying the bcache superblock... ', end='', flush=True)
-    synth_bdev.copy_to_physical(dev_fd, sb_write_offset)
+    synth_bdev.copy_to_physical(dev_fd, write_offset)
     os.close(dev_fd)
     del dev_fd
     print('ok')
 
     # Check the partition we're about to convert isn't in use either,
     # otherwise the partition table couldn't be reloaded.
-    dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
-    os.close(dev_fd)
-    del dev_fd
+    if not deactivated:
+        dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+        os.close(dev_fd)
+        del dev_fd
 
     print('Modifying the partition table... ', end='', flush=True)
     ptable.shift_left(part_start, part_start1)
