@@ -56,6 +56,16 @@ class BlockDevice:
         self.devpath = devpath
 
     @memoized_property
+    def ptable_type(self):
+        # TODO: also detect an MBR other than protective,
+        # and refuse to edit that.
+        rv = subprocess.check_output(
+            'blkid -p -o value -s PTTYPE --'.split() + [self.devpath]
+        ).rstrip().decode('ascii')
+        if rv:
+            return rv
+
+    @memoized_property
     def superblock_type(self):
         return subprocess.check_output(
             'blkid -o value -s TYPE --'.split() + [self.devpath]
@@ -105,23 +115,12 @@ def ptable_devpath(bdev):
     return os.path.realpath('/dev/block/' + devnum)
 
 
-def ptable_from_partition_device(bdev):
-    return PartitionTable(PartitionedDevice(ptable_devpath(bdev)))
-
 
 def start_of_partition(bdev):
     return int(open(bdev.sysfspath + '/start').read()) * 512
 
 
 class PartitionedDevice(BlockDevice):
-    @memoized_property
-    def ptable_type(self):
-        # TODO: also detect an MBR other than protective,
-        # and refuse to edit that.
-        return subprocess.check_output(
-            'blkid -p -o value -s PTTYPE --'.split() + [self.devpath]
-        ).rstrip().decode('ascii')
-
     @memoized_property
     def parted_device(self):
         import parted.device
@@ -138,10 +137,26 @@ class OverlappingPartition(Exception):
 
 
 class PartitionTable(BlockData):
-    @memoized_property
-    def parted_disk(self):
+    def __init__(self, device, parted_disk):
+        super(PartitionTable, self).__init__(device=device)
+        self.parted_disk = parted_disk
+
+    @classmethod
+    def from_partition_device(partition_device):
+        # the ptable that contains a partition
         import parted.disk
-        return parted.disk.Disk(self.device.parted_device)
+        ptable_device = PartitionedDevice(ptable_devpath(partition_device))
+        return cls(
+            device=ptable_device,
+            parted_disk=parted.disk.Disk(ptable_device.parted_device))
+
+    @classmethod
+    def mkgpt(cls, device):
+        import parted
+        ptable_device = PartitionedDevice(device.devpath)
+        return cls(
+            device=ptable_device,
+            parted_disk=parted.freshDisk(ptable_device.parted_device, 'gpt'))
 
     def _iter_range(self, start_sector, end_sector):
         # Loop on partitions overlapping with the range, excluding free space
@@ -214,7 +229,7 @@ class PartitionTable(BlockData):
             device=self.device.parted_device,
             start=left_part.geometry.start,
             end=start_sector1 - 1)
-        cons = parted.Constraint(exactGeom=geom)
+        cons = parted.constraint.Constraint(exactGeom=geom)
         assert self.parted_disk.setPartitionGeometry(
             left_part, cons, geom.start, geom.end) == True
 
@@ -222,7 +237,7 @@ class PartitionTable(BlockData):
             device=self.device.parted_device,
             start=start_sector1,
             end=right_part.geometry.end)
-        cons = parted.Constraint(exactGeom=geom)
+        cons = parted.constraint.Constraint(exactGeom=geom)
         assert self.parted_disk.setPartitionGeometry(
             right_part, cons, geom.start, geom.end) == True
 
@@ -720,7 +735,19 @@ class ShiftConvertStrategy(ConvertStrategy):
 
 
 class SyntheticDevice(BlockDevice):
-    pass
+    def copy_to_physical(self, dev_fd, shift_by=0):
+        assert len(self.data) == self.writable_hdr_size + self.writable_end_size
+        start_data = self.data[:self.writable_hdr_size]
+        end_data = self.data[self.writable_hdr_size:]
+        wrend_offset = self.writable_hdr_size + self.rz_size + shift_by
+
+        # Write then read back
+        assert os.pwrite(dev_fd, start_data, shift_by) == self.writable_hdr_size
+        assert os.pread(dev_fd, self.writable_hdr_size, shift_by) == start_data
+
+        if self.writable_end_size != 0:
+            assert os.pwrite(dev_fd, end_data, wrend_offset) == self.writable_end_size
+            assert os.pread(dev_fd, self.writable_end_size, wrend_offset) == end_data
 
 
 class ProgressListener:
@@ -745,13 +772,15 @@ class CLIProgressHandler(ProgressListener):
 
 
 @contextlib.contextmanager
-def synth_device(writable_size, rozeros_size):
-    writable_sectors = bytes_to_sector(writable_size)
-    rz_sectors = bytes_to_sector(rozeros_size)
+def synth_device(writable_hdr_size, rz_size, writable_end_size=0):
+    writable_sectors = bytes_to_sector(writable_hdr_size)
+    wrend_sectors = bytes_to_sector(writable_end_size)
+    rz_sectors = bytes_to_sector(rz_size)
+    wrend_sectors_offset = writable_sectors + rz_sectors
 
     with contextlib.ExitStack() as st:
         imgf = st.enter_context(tempfile.NamedTemporaryFile(suffix='.img'))
-        imgf.truncate(writable_size)
+        imgf.truncate(writable_hdr_size + writable_end_size)
 
         lo_dev = subprocess.check_output(
             'losetup -f --show --'.split() + [imgf.name]
@@ -775,13 +804,18 @@ def synth_device(writable_size, rozeros_size):
                 rz_sectors=rz_sectors),
             readonly=True,
             exit_stack=st)
+        dm_table_format = (
+            '0 {writable_sectors} linear {lo_dev} 0\n'
+             '{writable_sectors} {rz_sectors} linear {rozeros_devpath} 0\n')
+        if writable_end_size:
+            dm_table_format += (
+            '{wrend_sectors_offset} {wrend_sectors} linear {lo_dev} {writable_sectors}\n')
         mk_dm(
             synth_devname,
-            '0 {writable_sectors} linear {lo_dev} 0\n'
-            '{writable_sectors} {rz_sectors} linear {rozeros_devpath} 0\n'
-            .format(
+            dm_table_format.format(
                 writable_sectors=writable_sectors, lo_dev=lo_dev,
-                rz_sectors=rz_sectors,
+                rz_sectors=rz_sectors, wrend_sectors=wrend_sectors,
+                wrend_sectors_offset=wrend_sectors_offset,
                 rozeros_devpath='/dev/mapper/' + rozeros_devname),
             readonly=False,
             exit_stack=st)
@@ -790,10 +824,13 @@ def synth_device(writable_size, rozeros_size):
         yield synth
 
         data = imgf.read()
-        assert len(data) == writable_size
+        assert len(data) == writable_hdr_size + writable_end_size
 
         # Expose the data outside of the with statement
         synth.data = data
+        synth.rz_size = rz_size
+        synth.writable_hdr_size = writable_hdr_size
+        synth.writable_end_size = writable_end_size
 
 
 def main():
@@ -822,15 +859,60 @@ def main():
 
 def cmd_lv_to_gpt(args):
     import augeas
+    import parted
+    import _ped
     device = BlockDevice(args.device)
     debug = args.debug
+
+    if device.ptable_type is not None:
+        print(
+            'Already partitioned as {}'.format(device.ptable_type),
+            file=sys.stderr)
+        return 1
 
     # XXX Will give bogus results if it's a vg path instead of an lv path
     # Single-lv vg works by chance, but don't commit to it.
     lv_info = subprocess.check_output(
-        'lvs --noheadings --rows -o vg_name,vg_uuid,lv_name,lv_uuid --'.split()
+        'lvs --noheadings --rows --units=b --nosuffix '
+        '-o vg_name,vg_uuid,lv_name,lv_uuid,vg_extent_size --'.split()
         + [device.devpath], universal_newlines=True).splitlines()
-    vgname, vg_uuid, lvname, lv_uuid = (fi.lstrip() for fi in lv_info)
+    vgname, vg_uuid, lvname, lv_uuid, pe_size = (fi.lstrip() for fi in lv_info)
+
+    pe_size = int(pe_size)
+    pe_sectors = bytes_to_sector(pe_size)
+
+    # GPT needs some writable space at the end (header backup)
+    # For obscure reasons, parted tries to rewrite sectors near the
+    # end of an msdos/mbr partition, too, so we'll have to use GPT
+    gpt_end_size = 1024**2  # 1MiB
+    gpt_end_sectors = bytes_to_sector(gpt_end_size)
+
+    part_size = device.size - pe_size - gpt_end_size
+
+    progress = CLIProgressHandler()
+    block_stack = get_block_stack(device, progress)
+    block_stack.read_superblocks()
+    block_stack.reserve_end_area_verbose(part_size, progress)
+
+    # Check not in use
+    dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    os.close(dev_fd)
+
+    with synth_device(
+        pe_size, part_size, writable_end_size=gpt_end_size
+    ) as synth_gpt:
+        ptable = PartitionTable.mkgpt(synth_gpt)
+        # -1 at end, parted geometry uses inclusive end
+        geom = parted.geometry.Geometry(
+            device=ptable.device.parted_device,
+            start=pe_sectors,
+            end=bytes_to_sector(device.size) - gpt_end_sectors - 1)
+        part = parted.partition.Partition(
+            disk=ptable.parted_disk, type=_ped.PARTITION_NORMAL, geometry=geom)
+        cons = parted.constraint.Constraint(exactGeom=geom)
+        ptable.parted_disk.addPartition(partition=part, constraint=cons)
+        # Don't commit to OS, we're going to tear down the device
+        ptable.parted_disk.commitToDevice()
 
     with tempfile.TemporaryDirectory(suffix='.blocks') as tdname:
         vgcfgname = tdname + '/vg.cfg'
@@ -876,6 +958,7 @@ def cmd_lv_to_gpt(args):
         # shrinking last segment by one PE
         last_count = int(aug.get('$last/extent_count/int'))
         last_count -= 1
+        assert last_count > 0
         aug.set('$last/extent_count/int', '%d' % last_count)
 
         # inserting new segment at the beginning
@@ -894,9 +977,20 @@ def cmd_lv_to_gpt(args):
 
         aug.text_retrieve('LVM.lns', '/raw/vgcfg', '/vg', '/raw/vgcfg.new')
         open(vgcfgname + '.new', 'w').write(aug.get('/raw/vgcfg.new'))
+
         subprocess.call(
             ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
              vgcfgname, vgcfgname + '.new'])
+
+        quiet_call(
+            ['vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
+        # Make sure LVM updates the mapping, this is pretty critical
+        quiet_call(['lvchange', '--refresh', '--', device.devpath])
+
+    # Reopen, with a different mapping
+    dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    synth_gpt.copy_to_physical(dev_fd)
+    os.close(dev_fd)
 
 
 def cmd_to_bcache(args):
@@ -926,7 +1020,7 @@ def cmd_to_bcache(args):
     assert sb_size % 512 == 0
 
     progress = CLIProgressHandler()
-    ptable = ptable_from_partition_device(device)
+    ptable = PartitionTable.from_partition_device(device)
     part_start = start_of_partition(device)
     ptable.reserve_space_before(part_start, sb_size, progress)
     part_start1 = part_start - sb_size
@@ -951,11 +1045,7 @@ def cmd_to_bcache(args):
     dev_fd = os.open(write_part.path, os.O_SYNC|os.O_RDWR|os.O_EXCL)
 
     print('Copying the bcache superblock... ', end='', flush=True)
-    assert len(synth_bdev.data) == sb_size
-    wr_len = os.pwrite(dev_fd, synth_bdev.data, sb_write_offset)
-    assert wr_len == sb_size
-    # read back for the hell of it
-    assert os.pread(dev_fd, sb_size, sb_write_offset) == synth_bdev.data
+    synth_bdev.copy_to_physical(dev_fd, sb_write_offset)
     os.close(dev_fd)
     del dev_fd
     print('ok')
@@ -1145,10 +1235,7 @@ def cmd_to_lvm(args):
     print('Installing LVM metadata... ', end='', flush=True)
     # This had better be atomic
     # Though technically, only physical sector writes are guaranteed atomic
-    wr_len = os.pwrite(dev_fd, synth_pv.data, 0)
-    assert wr_len == pe_size
-    # read back for the hell of it
-    assert os.pread(dev_fd, pe_size, 0) == synth_pv.data
+    synth_pv.copy_to_physical(dev_fd)
     print('ok')
     print('LVM conversion successful!')
     if False:
