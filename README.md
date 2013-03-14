@@ -28,6 +28,19 @@ required:
 * <https://github.com/g2p/bcache-tools>
 * <https://github.com/g2p/pyparted> (thanks hayseed)
 
+## LV to bcache conversion
+
+`blocks lv-to-bcache` converts a logical volume to a bcache backing
+device.  Because the current version of bcache can't use an arbitrary
+data offset, this is done by sandwitching a GPT partition table between
+the LV and the bcache device; `kpartx -a` is required to activate it.
+
+This requires a development version of python-augeas, as well as the
+augeas library and headers (which your distribution may package) and the
+above bcache dependencies.
+
+* <https://github.com/g2p/python-augeas>
+
 # Requirements
 
 Python 3.3.  Command-line tools for LVM2, LUKS, filesystem resizing are
@@ -48,9 +61,10 @@ Or get the latest version:
     python3.3 setup.py develop --user
     cp -lt ~/bin ~/.local/bin/blocks
 
-# Usage
+# Usage (LVM conversion)
 
     blocks --help
+    blocks to-lvm --help
     sudo blocks to-lvm /dev/sdaN
 
 If `blocks` isn't in your path, replace with:
