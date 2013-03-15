@@ -986,6 +986,7 @@ def lv_to_gpt(device, debug):
 
     with tempfile.TemporaryDirectory(suffix='.blocks') as tdname:
         vgcfgname = tdname + '/vg.cfg'
+        print('Loading LVM metadata... ', end='', flush=True)
         quiet_call(
             ['vgcfgbackup', '--file', vgcfgname, '--', vgname])
         aug = augeas.Augeas(
@@ -996,6 +997,7 @@ def lv_to_gpt(device, debug):
         aug.set('/raw/vgcfg', vgcfg.read())
 
         aug.text_store('LVM.lns', '/raw/vgcfg', '/vg')
+        print('ok')
 
         # There is no easy way to quote for XPath, so whitelist
         assert all(ch in ASCII_ALNUM_WHITELIST for ch in vgname), vgname
@@ -1053,14 +1055,20 @@ def lv_to_gpt(device, debug):
                 ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
                  vgcfgname, vgcfgname + '.new'])
 
+        print(
+            'Inserting a free extent before LV contents... ',
+            end='', flush=True)
         quiet_call(
             ['vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
         # Make sure LVM updates the mapping, this is pretty critical
         quiet_call(['lvchange', '--refresh', '--', device.devpath])
+        print('ok')
 
     # Reopen, with a different mapping
     dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    print('Copying the GPT superblock... ', end='', flush=True)
     synth_gpt.copy_to_physical(dev_fd)
+    print('ok')
     os.close(dev_fd)
 
 
@@ -1142,7 +1150,9 @@ def to_bcache(device, debug):
         os.close(dev_fd)
         del dev_fd
 
-    print('Modifying the partition table... ', end='', flush=True)
+    print(
+        'Shifting partition to start on the bcache superblock... ',
+        end='', flush=True)
     ptable.shift_left(part_start, part_start1)
     print('ok')
 
