@@ -50,8 +50,8 @@ above) are needed if those features are used.
 
 On Debian/Ubuntu:
 
-    sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0
-
+    sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0 \
+        pkg-config libpython3.3-dev
     type pip-3.3 || alias pip-3.3='python3.3 -m pip.runner'
 
 # Installation
