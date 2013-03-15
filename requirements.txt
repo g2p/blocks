@@ -1,4 +1,4 @@
 -e git+https://github.com/g2p/blocks.git@master#egg=blocks
--e git+https://github.com/g2p/python-augeas.git@v0.4.2a0#egg=python-augeas
--e git+https://github.com/g2p/pyparted.git@v3.10a0#egg=pyparted
+-e git+https://github.com/g2p/python-augeas.git@v0.4.2a1#egg=python-augeas
+https://github.com/g2p/pyparted/archive/pyparted-3.10a1.tar.gz#egg=pyparted
 
