@@ -18,6 +18,8 @@ setup(
         'blocks',
     ],
     include_package_data=True,
+    install_requires=[
+        'python-augeas', 'pyparted'],
     classifiers='''
         Programming Language :: Python :: 3
         License :: OSI Approved :: GNU General Public License (GPL)
