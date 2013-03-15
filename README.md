@@ -2,6 +2,10 @@
 
 Conversion tools for block devices.
 
+Convert between raw partitions, logical volumes, and bcache
+devices witout moving data.  `blocks` shuffles blocks and spins
+off superblocks.
+
 ## LVM conversion
 
 `blocks to-lvm` takes a partition containing a filesystem, shrinks the
@@ -22,11 +26,10 @@ The new volume group can then be merged with other volume groups using
 `blocks to-bcache` converts a partition to a bcache backing device.
 This is done by inserting a bcache superblock before the partition
 (resizing filesystems as necessary) then shifting the start of the
-partition.  Development versions of bcache-tools and pyparted are
-required:
+partition.  A development version of `bcache-tools` (bcache cli
+utilities) is required:
 
 * <https://github.com/g2p/bcache-tools>
-* <https://github.com/g2p/pyparted> (thanks hayseed)
 
 ## LV to bcache conversion
 
@@ -35,30 +38,25 @@ device.  Because the current version of bcache can't use an arbitrary
 data offset, this is done by sandwitching a GPT partition table between
 the LV and the bcache device; `kpartx -a` is required to activate it.
 
-This requires a development version of python-augeas, as well as the
-augeas library and headers (which your distribution may package) and the
-above bcache dependencies.
-
-* <https://github.com/g2p/python-augeas>
-
 # Requirements
 
-Python 3.3.  Command-line tools for LVM2, LUKS, filesystem resizing are
-needed if those features are used.
+Python 3.3, pip and Git are required before installing.
+
+You will also need libparted (2.3 or newer, library and headers) and
+libaugeas (library).
+
+Command-line tools for LVM2, LUKS, filesystem resizing, and bcache (see
+above) are needed if those features are used.
+
+On Debian/Ubuntu:
+
+    sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0
+
+    type pip-3.3 || alias pip-3.3='python3.3 -m pip.runner'
 
 # Installation
 
-    pip install --user blocks
-    cp -lt ~/bin ~/.local/bin/blocks
-
-`pip` can be replaced with `pip-3.3` or `python3.3 -m pip.runner` to
-invoke the correct Python version.
-
-Or get the latest version:
-
-    git clone https://github.com/g2p/blocks.git
-    cd blocks
-    python3.3 setup.py develop --user
+    pip-3.3 install --user -r https://raw.github.com/g2p/blocks/master/requirements.txt
     cp -lt ~/bin ~/.local/bin/blocks
 
 # Usage (LVM conversion)
@@ -67,12 +65,11 @@ Or get the latest version:
     blocks to-lvm --help
     sudo blocks to-lvm /dev/sdaN
 
-If `blocks` isn't in your path, replace with:
+If `blocks` isn't in the shell's command path, replace with:
 
     sudo python3.3 -m blocks
 
-Don't forget to update `/etc/fstab` (no change is necessary if
-filesystems are mounted by uuid). If necessary, rebuild the grub config
-(grub2 needs to install some modules to boot to LVM directly) and your
-initramfs.
+Don't forget to update `/etc/fstab` (no change is needed if filesystems
+are mounted by uuid). If necessary, rebuild the grub config (grub2 needs
+to install some modules to boot to LVM directly) and your initramfs.
 
