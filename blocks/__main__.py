@@ -1048,9 +1048,10 @@ def lv_to_gpt(device, debug):
         aug.text_retrieve('LVM.lns', '/raw/vgcfg', '/vg', '/raw/vgcfg.new')
         open(vgcfgname + '.new', 'w').write(aug.get('/raw/vgcfg.new'))
 
-        subprocess.call(
-            ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
-             vgcfgname, vgcfgname + '.new'])
+        if debug:
+            subprocess.call(
+                ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
+                 vgcfgname, vgcfgname + '.new'])
 
         quiet_call(
             ['vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
