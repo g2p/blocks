@@ -13,6 +13,8 @@ import textwrap
 import time
 import uuid
 
+import pkg_resources
+
 
 # 4MiB PE, for vgmerge compatibility
 LVM_PE = 4 * 1024**2
@@ -986,9 +988,9 @@ def lv_to_gpt(device, debug):
         vgcfgname = tdname + '/vg.cfg'
         quiet_call(
             ['vgcfgbackup', '--file', vgcfgname, '--', vgname])
-        # XXX expand loadpath on install
         aug = augeas.Augeas(
-            loadpath='augeas', root='/dev/null',
+            loadpath=pkg_resources.resource_filename('blocks', 'augeas'),
+            root='/dev/null',
             flags=augeas.Augeas.NO_MODL_AUTOLOAD | augeas.Augeas.SAVE_NEWFILE)
         vgcfg = open(vgcfgname)
         aug.set('/raw/vgcfg', vgcfg.read())

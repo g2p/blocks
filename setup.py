@@ -17,6 +17,7 @@ setup(
     packages=[
         'blocks',
     ],
+    include_package_data=True,
     classifiers='''
         Programming Language :: Python :: 3
         License :: OSI Approved :: GNU General Public License (GPL)
