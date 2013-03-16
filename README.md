@@ -46,9 +46,12 @@ You will also need libparted (2.3 or newer, library and headers) and
 libaugeas (library only, 1.0 or newer).
 
 Command-line tools for LVM2, LUKS, filesystem resizing, and bcache (see
-above) are needed if those features are used.
+above) are needed if those features are used.  Kernel support for most
+filesystems as well as bcache (not in the mainline kernel) isn't
+required however.  A sufficiently recent live-cd or live-usb system is
+fine.
 
-On Debian/Ubuntu:
+On Debian/Ubuntu (raring is recommended):
 
     sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0 \
         pkg-config libpython3.3-dev
