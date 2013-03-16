@@ -17,7 +17,7 @@ import pkg_resources
 
 
 # 4MiB PE, for vgmerge compatibility
-LVM_PE = 4 * 1024**2
+LVM_PE_SIZE = 4 * 1024 ** 2
 
 # Currently something we have no control over
 BCACHE_SB_SIZE = 512 * 16
@@ -43,6 +43,30 @@ def bytes_to_sector(by):
     return sectors
 
 
+@contextlib.contextmanager
+def setenv(var, val):
+    old = os.environ.get(var)
+    os.environ[var] = val
+    yield
+    if old is not None:
+        os.environ[var] = old
+    else:
+        del os.environ[var]
+
+
+class UnsupportedSuperblock(Exception):
+    def __init__(self, device):
+        self.device = device
+
+
+class CantShrink(Exception):
+    pass
+
+
+class OverlappingPartition(Exception):
+    pass
+
+
 # SQLa, compatible license
 class memoized_property(object):
     """A read-only @property that is only evaluated once."""
@@ -61,10 +85,46 @@ class memoized_property(object):
         obj.__dict__.pop(self.__name__, None)
 
 
+def quiet_call(cmd, *args, **kwargs):
+    # universal_newlines is used to enable io decoding in the current locale
+    proc = subprocess.Popen(
+        cmd, *args, universal_newlines=True, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+    odat, edat = proc.communicate()
+    if proc.returncode != 0:
+        print(
+            'Command {!r} has failed with status {}\n'
+            'Standard output:\n{}\n'
+            'Standard error:\n{}'.format(
+                cmd, proc.returncode, odat, edat), file=sys.stderr)
+        raise subprocess.CalledProcessError(proc.returncode, cmd, odat)
+
+
+def mk_dm(devname, table, readonly, exit_stack):
+    cmd = 'dmsetup create --noudevsync --'.split() + [devname]
+    if readonly:
+        cmd[2:2] = ['--readonly']
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    proc.communicate(table.encode('ascii'))
+    assert proc.returncode == 0
+    exit_stack.callback(
+        lambda: quiet_call(
+            'dmsetup remove --noudevsync --'.split() + [devname]))
+
+
 class BlockDevice:
     def __init__(self, devpath):
         assert os.path.exists(devpath)
         self.devpath = devpath
+
+    def open_excl(self):
+        # O_EXCL on a block device takes the device lock,
+        # exclusive against mounts and the like.
+        # O_SYNC on a block device provides durability, see:
+        # http://www.codeproject.com/Articles/460057/HDD-FS-O_SYNC-Throughput-vs-Integrity
+        # O_DIRECT would bypass the block cache, which is irrelevant here
+        return os.open(
+            self.devpath, os.O_SYNC | os.O_RDWR | os.O_EXCL)
 
     @memoized_property
     def ptable_type(self):
@@ -180,10 +240,6 @@ class BlockData:
         self.device = device
 
 
-class OverlappingPartition(Exception):
-    pass
-
-
 class PartitionTable(BlockData):
     def __init__(self, device, parted_disk):
         super(PartitionTable, self).__init__(device=device)
@@ -281,7 +337,7 @@ class PartitionTable(BlockData):
                 end=start_sector1 - 1)
             cons = parted.constraint.Constraint(exactGeom=geom)
             assert self.parted_disk.setPartitionGeometry(
-                left_part, cons, geom.start, geom.end) == True
+                left_part, cons, geom.start, geom.end) is True
 
         geom = parted.geometry.Geometry(
             device=self.device.parted_device,
@@ -289,14 +345,10 @@ class PartitionTable(BlockData):
             end=right_part.geometry.end)
         cons = parted.constraint.Constraint(exactGeom=geom)
         assert self.parted_disk.setPartitionGeometry(
-            right_part, cons, geom.start, geom.end) == True
+            right_part, cons, geom.start, geom.end) is True
 
         # commitToDevice (atomic) + commitToOS (not atomic, less important)
         self.parted_disk.commit()
-
-
-class CantShrink(Exception):
-    pass
 
 
 class Filesystem(BlockData):
@@ -325,10 +377,10 @@ class Filesystem(BlockData):
                 quiet_call(
                     ['mount', '-t', self.vfstype, '-o', 'noatime,noexec,nodev',
                      '-n', '--', self.device.devpath, self.mpoint])
-                st.callback(lambda:
-                    quiet_call('umount -n -- '.split() + [self.mpoint]))
+                st.callback(
+                    lambda: quiet_call(
+                        'umount -n -- '.split() + [self.mpoint]))
             self._resize(pos)
-
 
         # measure size again
         self.read_superblock()
@@ -625,49 +677,6 @@ class ExtFS(Filesystem):
             'resize2fs --'.split() + [self.device.devpath, '%d' % block_count])
 
 
-def mk_dm(devname, table, readonly, exit_stack):
-    cmd = 'dmsetup create --noudevsync --'.split() + [devname]
-    if readonly:
-        cmd[2:2] = ['--readonly']
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    proc.communicate(table.encode('ascii'))
-    assert proc.returncode == 0
-    exit_stack.callback(lambda:
-        quiet_call(
-            'dmsetup remove --noudevsync --'.split() + [devname]))
-
-
-def quiet_call(cmd, *args, **kwargs):
-    # universal_newlines is used to enable io decoding in the current locale
-    proc = subprocess.Popen(
-        cmd, *args, universal_newlines=True, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
-    odat, edat = proc.communicate()
-    if proc.returncode != 0:
-        print(
-            'Command {!r} has failed with status {}\n'
-            'Standard output:\n{}\n'
-            'Standard error:\n{}'.format(
-                cmd, proc.returncode, odat, edat), file=sys.stderr)
-        raise subprocess.CalledProcessError(proc.returncode, cmd, odat)
-
-
-@contextlib.contextmanager
-def setenv(var, val):
-    old = os.environ.get(var)
-    os.environ[var] = val
-    yield
-    if old is not None:
-        os.environ[var] = old
-    else:
-        del os.environ[var]
-
-
-class UnsupportedSuperblock(Exception):
-    def __init__(self, device):
-        self.device = device
-
-
 class BlockStack:
     def __init__(self, stack):
         self.stack = stack
@@ -774,7 +783,8 @@ def get_block_stack(device, progress):
 
 class SyntheticDevice(BlockDevice):
     def copy_to_physical(self, dev_fd, *, shift_by=0, reserved_area=None):
-        assert len(self.data) == self.writable_hdr_size + self.writable_end_size
+        assert (
+            len(self.data) == self.writable_hdr_size + self.writable_end_size)
         start_data = self.data[:self.writable_hdr_size]
         end_data = self.data[self.writable_hdr_size:]
         wrend_offset = self.writable_hdr_size + self.rz_size + shift_by
@@ -791,15 +801,19 @@ class SyntheticDevice(BlockDevice):
 
         assert 0 <= shift_by < shift_by + self.writable_hdr_size <= size
         if self.writable_end_size != 0:
-            assert 0 <= wrend_offset < wrend_offset + self.writable_end_size <= size
+            assert 0 <= wrend_offset < (
+                wrend_offset + self.writable_end_size) <= size
 
         # Write then read back
-        assert os.pwrite(dev_fd, start_data, shift_by) == self.writable_hdr_size
+        assert os.pwrite(
+            dev_fd, start_data, shift_by) == self.writable_hdr_size
         assert os.pread(dev_fd, self.writable_hdr_size, shift_by) == start_data
 
         if self.writable_end_size != 0:
-            assert os.pwrite(dev_fd, end_data, wrend_offset) == self.writable_end_size
-            assert os.pread(dev_fd, self.writable_end_size, wrend_offset) == end_data
+            assert os.pwrite(
+                dev_fd, end_data, wrend_offset) == self.writable_end_size
+            assert os.pread(
+                dev_fd, self.writable_end_size, wrend_offset) == end_data
 
 
 class ProgressListener:
@@ -837,8 +851,8 @@ def synth_device(writable_hdr_size, rz_size, writable_end_size=0):
         lo_dev = subprocess.check_output(
             'losetup -f --show --'.split() + [imgf.name]
         ).rstrip().decode('ascii')
-        st.callback(lambda:
-            quiet_call('losetup -d --'.split() + [lo_dev]))
+        st.callback(
+            lambda: quiet_call('losetup -d --'.split() + [lo_dev]))
         rozeros_devname = 'rozeros-{}'.format(uuid.uuid1())
         synth_devname = 'synthetic-{}'.format(uuid.uuid1())
         synth_devpath = '/dev/mapper/' + synth_devname
@@ -858,10 +872,11 @@ def synth_device(writable_hdr_size, rz_size, writable_end_size=0):
             exit_stack=st)
         dm_table_format = (
             '0 {writable_sectors} linear {lo_dev} 0\n'
-             '{writable_sectors} {rz_sectors} linear {rozeros_devpath} 0\n')
+            '{writable_sectors} {rz_sectors} linear {rozeros_devpath} 0\n')
         if writable_end_size:
             dm_table_format += (
-            '{wrend_sectors_offset} {wrend_sectors} linear {lo_dev} {writable_sectors}\n')
+                '{wrend_sectors_offset} {wrend_sectors} '
+                'linear {lo_dev} {writable_sectors}\n')
         mk_dm(
             synth_devname,
             dm_table_format.format(
@@ -966,8 +981,8 @@ def rotate_lv_last_pe(*, vgname, vg_uuid, lvname, lv_uuid, size, debug):
 
         if debug:
             subprocess.call(
-                ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
-                 vgcfgname, vgcfgname + '.new'])
+                ['git', 'diff', '--no-index', '--patience', '--color-words',
+                 '--', vgcfgname, vgcfgname + '.new'])
 
         print(
             'Rotating the last extent to be the first... ',
@@ -1056,8 +1071,8 @@ def lv_to_gpt(args, *, with_bcache):
     # GPT needs some writable space at the end (header backup)
     # For unelucidated reasons, parted tries to rewrite sectors near the
     # end of an msdos/mbr partition, too, so we'll have to use GPT
-    gpt_end_size = 1024**2  # 1MiB
-    gpt_begin_size = 1024**2  # 1MiB
+    gpt_end_size = 1024 ** 2  # 1MiB
+    gpt_begin_size = 1024 ** 2  # 1MiB
 
     data_size = device.size - pe_size - gpt_end_size
 
@@ -1078,7 +1093,7 @@ def lv_to_gpt(args, *, with_bcache):
     del block_stack
 
     # Open early in case it is in use
-    dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    dev_fd = device.open_excl()
 
     with synth_device(
         pe_size, data_size, writable_end_size=gpt_end_size
@@ -1106,9 +1121,10 @@ def lv_to_gpt(args, *, with_bcache):
                 bcache_backing.read_superblock()
                 assert bcache_backing.offset == bsb_size
 
-            dev2_fd = os.open(synth_gpt.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
-            synth_bdev.copy_to_physical(dev2_fd, shift_by=pe_size-bsb_size)
+            dev2_fd = synth_gpt.open_excl()
+            synth_bdev.copy_to_physical(dev2_fd, shift_by=pe_size - bsb_size)
             os.close(dev2_fd)
+            del dev2_fd
 
     if with_bcache:
         print('Copying the combined superblock... ', end='', flush=True)
@@ -1119,6 +1135,7 @@ def lv_to_gpt(args, *, with_bcache):
     print('ok')
 
     os.close(dev_fd)
+    del dev_fd
 
     rotate_lv_last_pe(
         vgname=vgname, vg_uuid=vg_uuid,
@@ -1180,7 +1197,7 @@ def cmd_to_bcache(args):
         if device.dm_table():
             device.dm_deactivate()
             deactivated = True
-        dev_fd = os.open(ptable.device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+        dev_fd = ptable.device.open_excl()
         write_offset = part_start1
     else:
         # Free space, or something else we can't touch
@@ -1199,7 +1216,7 @@ def cmd_to_bcache(args):
     # Check the partition we're about to convert isn't in use either,
     # otherwise the partition table couldn't be reloaded.
     if not deactivated:
-        dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+        dev_fd = device.open_excl()
         os.close(dev_fd)
         del dev_fd
 
@@ -1240,7 +1257,7 @@ def cmd_to_lvm(args):
         lvname = vgname
     assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname)
 
-    pe_size = LVM_PE
+    pe_size = LVM_PE_SIZE
     pe_sectors = bytes_to_sector(pe_size)
     # -1 because we reserve pe_size for the lvm label and one metadata area
     pe_count = device.size // pe_size - 1
@@ -1259,12 +1276,7 @@ def cmd_to_lvm(args):
     block_stack.deactivate()
     del block_stack
 
-    # O_EXCL on a block device takes the device lock,
-    # exclusive against mounts and the like.
-    # O_SYNC on a block device provides durability, see:
-    # http://www.codeproject.com/Articles/460057/HDD-FS-O_SYNC-Throughput-vs-Integrity
-    # O_DIRECT would bypass the block cache, which is irrelevant here
-    dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
+    dev_fd = device.open_excl()
     print(
         'Copying {} bytes from pos 0 to pos {}... '
         .format(pe_size, pe_newpos),
@@ -1386,6 +1398,9 @@ def cmd_to_lvm(args):
     # Though technically, only physical sector writes are guaranteed atomic
     synth_pv.copy_to_physical(dev_fd)
     print('ok')
+    os.close(dev_fd)
+    del dev_fd
+
     print('LVM conversion successful!')
     if False:
         print('Enable the volume group with\n'
