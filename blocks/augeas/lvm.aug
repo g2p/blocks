@@ -25,7 +25,8 @@ module LVM =
 
 	(* strings can contain backslash-escaped dquotes, but I don't know
 	 * how to get the message across to augeas *)
-	let str = [label "str". Quote.do_dquote (store /[^"]*/)]
+	let str = [label "str".
+		Util.del_str "\"" . store /[^"]*/ . Util.del_str "\""]
 	let int = [label "int". store Rx.integer]
 	(* View: flat_literal
 	 * A literal without structure *)
@@ -60,7 +61,7 @@ module LVM =
 			   del /[ \t]*\{\n/ " {\n"
 			  .[label "dict".(nondef | def)*]
 			  . Util.indent . Util.del_str "}\n"
-			  |Sep.space_equal . val . Util.comment_or_eol)]
+			  |del /[ \t]*=[ \t]*/ " = " . val . Util.comment_or_eol)]
 
 	(* View: lns
 	 * The main lens *)
