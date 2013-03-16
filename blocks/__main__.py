@@ -911,6 +911,11 @@ def main():
     sp_lv_to_gpt.add_argument('device')
     sp_lv_to_gpt.set_defaults(action=cmd_lv_to_gpt)
 
+    # Give help when no subcommand is given
+    if not sys.argv[1:]:
+        parser.print_help()
+        return
+
     args = parser.parse_args()
     return args.action(args)
 
