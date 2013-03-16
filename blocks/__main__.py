@@ -952,7 +952,7 @@ def lv_to_gpt(device, debug):
     pe_sectors = bytes_to_sector(pe_size)
 
     # GPT needs some writable space at the end (header backup)
-    # For obscure reasons, parted tries to rewrite sectors near the
+    # For unelucidated reasons, parted tries to rewrite sectors near the
     # end of an msdos/mbr partition, too, so we'll have to use GPT
     gpt_end_size = 1024**2  # 1MiB
     gpt_end_sectors = bytes_to_sector(gpt_end_size)

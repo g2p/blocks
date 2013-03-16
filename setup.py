@@ -40,5 +40,5 @@ setup(
     devices witout moving data.
 
     See `github.com/g2p/blocks <https://github.com/g2p/blocks#readme>`_
-    for usage instructions.''')
+    for installation and usage instructions.''')
 
