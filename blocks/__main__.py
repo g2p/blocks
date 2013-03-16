@@ -1027,7 +1027,7 @@ def lv_to_gpt(device, debug):
                     '$lv/segment{}/dict/start_extent/int'.format(i))) + 1))
             aug.rename('$lv/segment{}'.format(i), 'segment{}'.format(i + 1))
 
-        aug.defvar('last', '$lv/segment{}/dict'.format(i + 1))
+        aug.defvar('last', '$lv/segment{}/dict'.format(segment_count + 1))
 
         # shrinking last segment by one PE
         last_count = int(aug.get('$last/extent_count/int'))
