@@ -1,17 +1,17 @@
 (*
 Module: LVM
-  Parses LVM metadata.
+	Parses LVM metadata.
 
 Author: Gabriel de Perthuis	      <g2p.code+augeas@gmail.com>
 
 About: License
-  This file is licensed under the LGPL v2+.
+	This file is licensed under the LGPL v2+.
 
 About: Configuration files
-  This lens applies to files in /etc/lvm/backup and /etc/lvm/archive.
+	This lens applies to files in /etc/lvm/backup and /etc/lvm/archive.
 
 About: Examples
-  The <Test_LVM> file contains various examples and tests.
+	The <Test_LVM> file contains various examples and tests.
 *)
 
 module LVM =
