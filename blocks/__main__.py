@@ -963,6 +963,8 @@ def lv_to_gpt(device, debug):
     block_stack = get_block_stack(device, progress)
     block_stack.read_superblocks()
     block_stack.reserve_end_area_verbose(part_size, progress)
+    block_stack.deactivate()
+    del block_stack
 
     # Check not in use
     dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
