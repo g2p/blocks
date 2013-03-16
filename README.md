@@ -43,7 +43,7 @@ the LV and the bcache device; `kpartx -a` is required to activate it.
 Python 3.3, pip and Git are required before installing.
 
 You will also need libparted (2.3 or newer, library and headers) and
-libaugeas (library).
+libaugeas (library only, 1.0 or newer).
 
 Command-line tools for LVM2, LUKS, filesystem resizing, and bcache (see
 above) are needed if those features are used.
