@@ -770,24 +770,26 @@ def get_block_stack(device, progress):
         return BlockStack(stack)
 
 
-class ConvertStrategy:
-    pass
-
-
-class RotateConvertStrategy(ConvertStrategy):
-    pass
-
-
-class ShiftConvertStrategy(ConvertStrategy):
-    pass
-
-
 class SyntheticDevice(BlockDevice):
-    def copy_to_physical(self, dev_fd, shift_by=0):
+    def copy_to_physical(self, dev_fd, *, shift_by=0, reserved_area=None):
         assert len(self.data) == self.writable_hdr_size + self.writable_end_size
         start_data = self.data[:self.writable_hdr_size]
         end_data = self.data[self.writable_hdr_size:]
         wrend_offset = self.writable_hdr_size + self.rz_size + shift_by
+        size = self.writable_hdr_size + self.rz_size + self.writable_end_size
+
+        if shift_by < 0:
+            # Means we should rotate to the left
+            # Update shift_by *after* setting wrend_offset
+            shift_by += size
+
+        if reserved_area is not None:
+            assert shift_by >= reserved_area
+            assert wrend_offset >= reserved_area
+
+        assert 0 <= shift_by < shift_by + self.writable_hdr_size <= size
+        if self.writable_end_size != 0:
+            assert 0 <= wrend_offset < wrend_offset + self.writable_end_size <= size
 
         # Write then read back
         assert os.pwrite(dev_fd, start_data, shift_by) == self.writable_hdr_size
@@ -881,6 +883,101 @@ def synth_device(writable_hdr_size, rz_size, writable_end_size=0):
         synth.writable_end_size = writable_end_size
 
 
+def rotate_lv_last_pe(*, vgname, vg_uuid, lvname, lv_uuid, size, debug):
+    """Move the last physical extent of a LV to the start,
+    then poke LVM to refresh the mapping.
+    """
+
+    import augeas
+
+    with tempfile.TemporaryDirectory(suffix='.blocks') as tdname:
+        vgcfgname = tdname + '/vg.cfg'
+        print('Loading LVM metadata... ', end='', flush=True)
+        quiet_call(
+            ['vgcfgbackup', '--file', vgcfgname, '--', vgname])
+        aug = augeas.Augeas(
+            loadpath=pkg_resources.resource_filename('blocks', 'augeas'),
+            root='/dev/null',
+            flags=augeas.Augeas.NO_MODL_AUTOLOAD | augeas.Augeas.SAVE_NEWFILE)
+        vgcfg = open(vgcfgname)
+        aug.set('/raw/vgcfg', vgcfg.read())
+
+        aug.text_store('LVM.lns', '/raw/vgcfg', '/vg')
+        print('ok')
+
+        # There is no easy way to quote for XPath, so whitelist
+        assert all(ch in ASCII_ALNUM_WHITELIST for ch in vgname), vgname
+        assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname), lvname
+
+        aug.defvar('vg', '/vg/{}/dict'.format(vgname))
+        assert aug.get('$vg/id/str') == vg_uuid
+        aug.defvar('lv', '$vg/logical_volumes/dict/{}/dict'.format(lvname))
+        assert aug.get('$lv/id/str') == lv_uuid
+        segment_count = int(aug.get('$lv/segment_count/int'))
+        pe_sectors = int(aug.get('$vg/extent_size/int'))
+        extent_total = 0
+
+        # checking all segments are linear
+        for i in range(1, segment_count + 1):
+            assert aug.get(
+                '$lv/segment{}/dict/type/str'.format(i)) == 'striped'
+            assert int(aug.get(
+                '$lv/segment{}/dict/stripe_count/int'.format(i))) == 1
+            extent_total += int(aug.get(
+                '$lv/segment{}/dict/extent_count/int'.format(i)))
+
+        assert extent_total * pe_sectors == bytes_to_sector(size)
+
+        # shifting segments
+        aug.set('$lv/segment_count/int', '%d' % (segment_count + 1))
+        for i in range(segment_count, 0, -1):
+            aug.set(
+                '$lv/segment{}/dict/start_extent/int'.format(i),
+                '%d' % (int(aug.get(
+                    '$lv/segment{}/dict/start_extent/int'.format(i))) + 1))
+            aug.rename('$lv/segment{}'.format(i), 'segment{}'.format(i + 1))
+
+        aug.defvar('last', '$lv/segment{}/dict'.format(segment_count + 1))
+
+        # shrinking last segment by one PE
+        last_count = int(aug.get('$last/extent_count/int'))
+        last_count -= 1
+        assert last_count > 0
+        aug.set('$last/extent_count/int', '%d' % last_count)
+
+        # inserting new segment at the beginning
+        aug.insert('$lv/segment2', 'segment1')
+        aug.set('$lv/segment1/dict/start_extent/int', '%d' % 0)
+        aug.set('$lv/segment1/dict/extent_count/int', '%d' % 1)
+        aug.set('$lv/segment1/dict/type/str', 'striped')
+        aug.set('$lv/segment1/dict/stripe_count/int', '%d' % 1)
+        # repossessing the last segment's last PE
+        aug.set(
+            '$lv/segment1/dict/stripes/list/1/str',
+            aug.get('$last/stripes/list/1/str'))
+        aug.set(
+            '$lv/segment1/dict/stripes/list/2/int',
+            '%d' % (int(aug.get('$last/stripes/list/2/int')) + last_count))
+
+        aug.text_retrieve('LVM.lns', '/raw/vgcfg', '/vg', '/raw/vgcfg.new')
+        open(vgcfgname + '.new', 'w').write(aug.get('/raw/vgcfg.new'))
+
+        if debug:
+            subprocess.call(
+                ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
+                 vgcfgname, vgcfgname + '.new'])
+
+        print(
+            'Rotating the last extent to be the first... ',
+            end='', flush=True)
+        quiet_call(
+            ['vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
+        # Make sure LVM updates the mapping, this is pretty critical
+        quiet_call(
+            ['lvchange', '--refresh', '--', '{}/{}'.format(vgname, lvname)])
+        print('ok')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
@@ -935,7 +1032,6 @@ def cmd_lv_to_gpt(args):
 
 
 def lv_to_gpt(device, debug):
-    import augeas
     import parted
     import _ped
 
@@ -956,6 +1052,8 @@ def lv_to_gpt(device, debug):
     pe_size = int(pe_size)
     pe_sectors = bytes_to_sector(pe_size)
 
+    assert device.size % pe_size == 0
+
     # GPT needs some writable space at the end (header backup)
     # For unelucidated reasons, parted tries to rewrite sectors near the
     # end of an msdos/mbr partition, too, so we'll have to use GPT
@@ -973,7 +1071,6 @@ def lv_to_gpt(device, debug):
 
     # Check not in use
     dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
-    os.close(dev_fd)
 
     with synth_device(
         pe_size, part_size, writable_end_size=gpt_end_size
@@ -991,92 +1088,16 @@ def lv_to_gpt(device, debug):
         # Don't commit to OS, we're going to tear down the device
         ptable.parted_disk.commitToDevice()
 
-    with tempfile.TemporaryDirectory(suffix='.blocks') as tdname:
-        vgcfgname = tdname + '/vg.cfg'
-        print('Loading LVM metadata... ', end='', flush=True)
-        quiet_call(
-            ['vgcfgbackup', '--file', vgcfgname, '--', vgname])
-        aug = augeas.Augeas(
-            loadpath=pkg_resources.resource_filename('blocks', 'augeas'),
-            root='/dev/null',
-            flags=augeas.Augeas.NO_MODL_AUTOLOAD | augeas.Augeas.SAVE_NEWFILE)
-        vgcfg = open(vgcfgname)
-        aug.set('/raw/vgcfg', vgcfg.read())
-
-        aug.text_store('LVM.lns', '/raw/vgcfg', '/vg')
-        print('ok')
-
-        # There is no easy way to quote for XPath, so whitelist
-        assert all(ch in ASCII_ALNUM_WHITELIST for ch in vgname), vgname
-        assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname), lvname
-
-        aug.defvar('vg', '/vg/{}/dict'.format(vgname))
-        assert aug.get('$vg/id/str') == vg_uuid
-        aug.defvar('lv', '$vg/logical_volumes/dict/{}/dict'.format(lvname))
-        assert aug.get('$lv/id/str') == lv_uuid
-        segment_count = int(aug.get('$lv/segment_count/int'))
-
-        # checking all segments are linear
-        for i in range(1, segment_count + 1):
-            assert aug.get(
-                '$lv/segment{}/dict/type/str'.format(i)) == 'striped'
-            assert int(aug.get(
-                '$lv/segment{}/dict/stripe_count/int'.format(i))) == 1
-
-        # shifting segments
-        aug.set('$lv/segment_count/int', '%d' % (segment_count + 1))
-        for i in range(segment_count, 0, -1):
-            aug.set(
-                '$lv/segment{}/dict/start_extent/int'.format(i),
-                '%d' % (int(aug.get(
-                    '$lv/segment{}/dict/start_extent/int'.format(i))) + 1))
-            aug.rename('$lv/segment{}'.format(i), 'segment{}'.format(i + 1))
-
-        aug.defvar('last', '$lv/segment{}/dict'.format(segment_count + 1))
-
-        # shrinking last segment by one PE
-        last_count = int(aug.get('$last/extent_count/int'))
-        last_count -= 1
-        assert last_count > 0
-        aug.set('$last/extent_count/int', '%d' % last_count)
-
-        # inserting new segment at the beginning
-        aug.insert('$lv/segment2', 'segment1')
-        aug.set('$lv/segment1/dict/start_extent/int', '%d' % 0)
-        aug.set('$lv/segment1/dict/extent_count/int', '%d' % 1)
-        aug.set('$lv/segment1/dict/type/str', 'striped')
-        aug.set('$lv/segment1/dict/stripe_count/int', '%d' % 1)
-        # repossessing the last segment's last PE
-        aug.set(
-            '$lv/segment1/dict/stripes/list/1/str',
-            aug.get('$last/stripes/list/1/str'))
-        aug.set(
-            '$lv/segment1/dict/stripes/list/2/int',
-            '%d' % (int(aug.get('$last/stripes/list/2/int')) + last_count))
-
-        aug.text_retrieve('LVM.lns', '/raw/vgcfg', '/vg', '/raw/vgcfg.new')
-        open(vgcfgname + '.new', 'w').write(aug.get('/raw/vgcfg.new'))
-
-        if debug:
-            subprocess.call(
-                ['git', 'diff', '--no-index', '--patience', '--color-words', '--',
-                 vgcfgname, vgcfgname + '.new'])
-
-        print(
-            'Inserting a free extent before LV contents... ',
-            end='', flush=True)
-        quiet_call(
-            ['vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
-        # Make sure LVM updates the mapping, this is pretty critical
-        quiet_call(['lvchange', '--refresh', '--', device.devpath])
-        print('ok')
-
-    # Reopen, with a different mapping
-    dev_fd = os.open(device.devpath, os.O_SYNC|os.O_RDWR|os.O_EXCL)
     print('Copying the GPT superblock... ', end='', flush=True)
-    synth_gpt.copy_to_physical(dev_fd)
+    synth_gpt.copy_to_physical(
+        dev_fd, shift_by=-pe_size, reserved_area=part_size)
     print('ok')
     os.close(dev_fd)
+
+    rotate_lv_last_pe(
+        vgname=vgname, vg_uuid=vg_uuid,
+        lvname=lvname, lv_uuid=lv_uuid,
+        size=device.size, debug=debug)
 
 
 def cmd_to_bcache(args):
@@ -1145,7 +1166,7 @@ def to_bcache(device, debug):
         return 1
 
     print('Copying the bcache superblock... ', end='', flush=True)
-    synth_bdev.copy_to_physical(dev_fd, write_offset)
+    synth_bdev.copy_to_physical(dev_fd, shift_by=write_offset)
     os.close(dev_fd)
     del dev_fd
     print('ok')
