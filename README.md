@@ -56,7 +56,7 @@ On Debian/Ubuntu:
 
 # Installation
 
-    pip-3.3 install --user -r https://raw.github.com/g2p/blocks/master/requirements.txt
+    pip-3.3 install --user -r <(wget -O- https://raw.github.com/g2p/blocks/master/requirements.txt)
     cp -lt ~/bin ~/.local/bin/blocks
 
 # Usage (LVM conversion)
