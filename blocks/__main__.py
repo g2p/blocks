@@ -25,7 +25,7 @@ ASCII_ALNUM_WHITELIST = string.ascii_letters + string.digits
 
 # Fairly strict, snooping an incorrect mapping would be bad
 dm_crypt_re = re.compile(
-    r'^0 (?P<plainsize>\d+) crypt (?P<cipher>[a-z0-9-]+) 0+ 0'
+    r'^0 (?P<plainsize>\d+) crypt (?P<cipher>[a-z0-9:-]+) 0+ 0'
     ' (?P<major>\d+):(?P<minor>\d+) (?P<offset>\d+)\n$',
     re.ASCII)
 
