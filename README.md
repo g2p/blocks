@@ -57,6 +57,11 @@ On Debian/Ubuntu (raring is recommended):
         pkg-config libpython3.3-dev
     type pip-3.3 || alias pip-3.3='python3.3 -m pip.runner'
 
+For btrfs resizing, you need a package that provides `btrfs-show-super`,
+or you can install from source:
+
+* <http://git.kernel.org/cgit/linux/kernel/git/mason/btrfs-progs.git>
+
 # Installation
 
     pip-3.3 install --user -r <(wget -O- https://raw.github.com/g2p/blocks/master/requirements.txt)
