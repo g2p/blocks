@@ -1114,7 +1114,7 @@ def lv_to_gpt(args, *, with_bcache):
         ptable.parted_disk.commitToDevice()
 
         if with_bcache:
-            with synth_device(bsb_size, device.size) as synth_bdev:
+            with synth_device(bsb_size, data_size) as synth_bdev:
                 quiet_call(
                     ['make-bcache', '--bdev', synth_bdev.devpath])
                 bcache_backing = BCacheBacking(synth_bdev)
