@@ -184,7 +184,13 @@ class BlockDevice:
 
     @memoized_property
     def is_partition(self):
-        return os.path.exists(self.sysfspath + '/start')
+        return (
+            os.path.exists(self.sysfspath + '/partition') and
+            bool(int(open(self.sysfspath + '/partition').read())))
+
+    @memoized_property
+    def is_dm(self):
+        return os.path.exists(self.sysfspath + '/dm')
 
     @memoized_property
     def part_start(self):
@@ -992,81 +998,37 @@ def rotate_lv_last_pe(*, vgname, vg_uuid, lvname, lv_uuid, size, debug):
         print('ok')
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--debug', action='store_true')
-    commands = parser.add_subparsers(dest='command', metavar='command')
-
-    sp_to_lvm = commands.add_parser(
-        'to-lvm',
-        help='Convert to LVM')
-    sp_to_lvm.add_argument('device')
-    sp_to_lvm.add_argument('--vg-name', dest='vgname', type=str)
-    sp_to_lvm.set_defaults(action=cmd_to_lvm)
-
-    sp_lv_to_bcache = commands.add_parser(
-        'lv-to-bcache',
-        help='Convert a logical volume to a bcache backing device')
-    sp_lv_to_bcache.add_argument('device')
-    sp_lv_to_bcache.set_defaults(action=cmd_lv_to_bcache)
-
-    sp_to_bcache = commands.add_parser(
-        'to-bcache',
-        help='Convert a partition to a bcache backing device')
-    sp_to_bcache.add_argument('device')
-    sp_to_bcache.set_defaults(action=cmd_to_bcache)
-
-    # Give help when no subcommand is given
-    if not sys.argv[1:]:
-        parser.print_help()
-        return
-
-    args = parser.parse_args()
-    return args.action(args)
+def make_bcache_sb(bsb_size, data_size):
+    with synth_device(bsb_size, data_size) as synth_bdev:
+        quiet_call(
+            ['make-bcache', '--bdev', '--data-offset-sectors',
+             '%d' % bytes_to_sector(bsb_size), synth_bdev.devpath])
+        bcache_backing = BCacheBacking(synth_bdev)
+        bcache_backing.read_superblock()
+        assert bcache_backing.offset == bsb_size
+    return synth_bdev
 
 
-def cmd_lv_to_bcache(args):
-    device = BlockDevice(args.device)
-    debug = args.debug
-
-    if device.ptable_type is not None:
-        print(
-            'Already partitioned as {}'.format(device.ptable_type),
-            file=sys.stderr)
-        return 1
-
-    # XXX Will give bogus results if it's a vg path instead of an lv path
-    # Single-lv vg works by chance, but don't commit to it.
+def lv_to_bcache(device, debug, progress):
     lv_info = subprocess.check_output(
         'lvs --noheadings --rows --units=b --nosuffix '
         '-o vg_name,vg_uuid,lv_name,lv_uuid,vg_extent_size --'.split()
         + [device.devpath], universal_newlines=True).splitlines()
     vgname, vg_uuid, lvname, lv_uuid, pe_size = (fi.lstrip() for fi in lv_info)
-
     pe_size = int(pe_size)
-    pe_sectors = bytes_to_sector(pe_size)
 
     assert device.size % pe_size == 0
     data_size = device.size - pe_size
 
-    progress = CLIProgressHandler()
     block_stack = get_block_stack(device, progress)
     block_stack.read_superblocks()
     block_stack.reserve_end_area_verbose(data_size, progress)
     block_stack.deactivate()
     del block_stack
 
-    # Open early in case it is in use
     dev_fd = device.open_excl()
 
-    with synth_device(pe_size, data_size) as synth_bdev:
-        quiet_call(
-            ['make-bcache', '--bdev', '--data-offset-sector',
-             '%d' % pe_sectors, synth_bdev.devpath])
-        bcache_backing = BCacheBacking(synth_bdev)
-        bcache_backing.read_superblock()
-        assert bcache_backing.offset == pe_size
-
+    synth_bdev = make_bcache_sb(pe_size, data_size)
     print('Copying the bcache superblock... ', end='', flush=True)
     synth_bdev.copy_to_physical(dev_fd, shift_by=-pe_size)
     print('ok')
@@ -1080,66 +1042,35 @@ def cmd_lv_to_bcache(args):
         size=device.size, debug=debug)
 
 
-def cmd_to_bcache(args):
-    device = BlockDevice(args.device)
-    debug = args.debug
-
-    if device.has_bcache_superblock:
-        print(
-            'Device {} already has a bcache super block.'
-            .format(device.devpath), file=sys.stderr)
-        return 1
-
-    if not device.is_partition:
-        print(
-            'Device {} is not a partition'.format(device.devpath),
-            file=sys.stderr)
-        return 1
-
+def part_to_bcache(device, debug, progress):
     # Detect the alignment parted would use?
     # I don't think it can be greater than 1MiB, in which case
     # there is no need.
     bsb_size = 1024**2
+    data_size = device.size
 
-    progress = CLIProgressHandler()
     ptable = PartitionTable.from_partition_device(device)
     part_start = device.part_start
     ptable.reserve_space_before(part_start, bsb_size, progress)
     part_start1 = part_start - bsb_size
 
-    # Make a synthetic backing device
-    with synth_device(bsb_size, device.size) as synth_bdev:
-        quiet_call(
-            ['make-bcache', '--bdev', '--data-offset-sector',
-             '%d' % bytes_to_sector(bsb_size), synth_bdev.devpath])
-        bcache_backing = BCacheBacking(synth_bdev)
-        bcache_backing.read_superblock()
-        assert bcache_backing.offset == bsb_size
-
     import _ped
     write_part = ptable.parted_disk.getPartitionBySector(part_start1 // 512)
-    deactivated = False
 
     if write_part.type == _ped.PARTITION_NORMAL:
         write_offset = part_start1 - (512 * write_part.geometry.start)
         dev_fd = os.open(write_part.path, os.O_SYNC|os.O_RDWR|os.O_EXCL)
     elif write_part.type == _ped.PARTITION_FREESPACE:
-        # XXX Writing into the parent device doesn't work if it is mapped (EBUSY),
-        # so try to tear down a DMPartition.
-        # Or maybe try ped_device_write / ped_geometry_write?
-        if device.dm_table():
-            device.dm_deactivate()
-            deactivated = True
         dev_fd = ptable.device.open_excl()
         write_offset = part_start1
     else:
-        # Free space, or something else we can't touch
         print(
             'Can\'t write outside of a normal partition (marked {})'
             .format(_ped.partition_type_get_name(write_part.type)),
             file=sys.stderr)
         return 1
 
+    synth_bdev = make_bcache_sb(bsb_size, data_size)
     print('Copying the bcache superblock... ', end='', flush=True)
     synth_bdev.copy_to_physical(dev_fd, shift_by=write_offset)
     os.close(dev_fd)
@@ -1148,16 +1079,65 @@ def cmd_to_bcache(args):
 
     # Check the partition we're about to convert isn't in use either,
     # otherwise the partition table couldn't be reloaded.
-    if not deactivated:
-        dev_fd = device.open_excl()
-        os.close(dev_fd)
-        del dev_fd
+    dev_fd = device.open_excl()
+    os.close(dev_fd)
+    del dev_fd
 
     print(
         'Shifting partition to start on the bcache superblock... ',
         end='', flush=True)
     ptable.shift_left(part_start, part_start1)
     print('ok')
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--debug', action='store_true')
+    commands = parser.add_subparsers(dest='command', metavar='command')
+
+    sp_to_lvm = commands.add_parser(
+        'to-lvm',
+        help='Convert to LVM')
+    sp_to_lvm.add_argument('device')
+    sp_to_lvm.add_argument('--vg-name', dest='vgname', type=str)
+    sp_to_lvm.set_defaults(action=cmd_to_lvm)
+
+    sp_to_bcache = commands.add_parser(
+        'to-bcache',
+        help='Convert a block device to use bcache')
+    sp_to_bcache.add_argument('device')
+    sp_to_bcache.set_defaults(action=cmd_to_bcache)
+
+    # Give help when no subcommand is given
+    if not sys.argv[1:]:
+        parser.print_help()
+        return
+
+    args = parser.parse_args()
+    return args.action(args)
+
+
+def cmd_to_bcache(args):
+    device = BlockDevice(args.device)
+    debug = args.debug
+    progress = CLIProgressHandler()
+
+    if device.has_bcache_superblock:
+        print(
+            'Device {} already has a bcache super block.'
+            .format(device.devpath), file=sys.stderr)
+        return 1
+
+    if device.is_partition:
+        return part_to_bcache(device, debug, progress)
+    elif device.is_dm:
+        return lv_to_bcache(device, debug, progress)
+    else:
+        print(
+            'Device {} is not a partition or a logical volume'
+            .format(device.devpath),
+            file=sys.stderr)
+        return 1
 
 
 def cmd_to_lvm(args):
