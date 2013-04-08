@@ -19,9 +19,6 @@ import pkg_resources
 # 4MiB PE, for vgmerge compatibility
 LVM_PE_SIZE = 4 * 1024 ** 2
 
-# Currently something we have no control over
-BCACHE_SB_SIZE = 512 * 16
-
 ASCII_ALNUM_WHITELIST = string.ascii_letters + string.digits
 
 
@@ -1019,12 +1016,6 @@ def main():
     sp_to_bcache.add_argument('device')
     sp_to_bcache.set_defaults(action=cmd_to_bcache)
 
-    sp_lv_to_gpt = commands.add_parser(
-        'lv-to-gpt',
-        help='Insert a partition table at the start of a logical volume')
-    sp_lv_to_gpt.add_argument('device')
-    sp_lv_to_gpt.set_defaults(action=cmd_lv_to_gpt)
-
     # Give help when no subcommand is given
     if not sys.argv[1:]:
         parser.print_help()
@@ -1035,17 +1026,6 @@ def main():
 
 
 def cmd_lv_to_bcache(args):
-    return lv_to_gpt(args, with_bcache=True)
-
-
-def cmd_lv_to_gpt(args):
-    return lv_to_gpt(args, with_bcache=False)
-
-
-def lv_to_gpt(args, *, with_bcache):
-    import parted
-    import _ped
-
     device = BlockDevice(args.device)
     debug = args.debug
 
@@ -1067,71 +1047,28 @@ def lv_to_gpt(args, *, with_bcache):
     pe_sectors = bytes_to_sector(pe_size)
 
     assert device.size % pe_size == 0
-
-    # GPT needs some writable space at the end (header backup)
-    # For unelucidated reasons, parted tries to rewrite sectors near the
-    # end of an msdos/mbr partition, too, so we'll have to use GPT
-    gpt_end_size = 1024 ** 2  # 1MiB
-    gpt_begin_size = 1024 ** 2  # 1MiB
-
-    data_size = device.size - pe_size - gpt_end_size
-
-    if with_bcache:
-        bsb_size = BCACHE_SB_SIZE
-        part_size = data_size + bsb_size
-        part_start = pe_size - bsb_size
-        assert gpt_begin_size + bsb_size <= pe_size
-    else:
-        part_size = data_size
-        part_start = pe_size
+    data_size = device.size - pe_size
 
     progress = CLIProgressHandler()
     block_stack = get_block_stack(device, progress)
     block_stack.read_superblocks()
-    block_stack.reserve_end_area_verbose(part_size, progress)
+    block_stack.reserve_end_area_verbose(data_size, progress)
     block_stack.deactivate()
     del block_stack
 
     # Open early in case it is in use
     dev_fd = device.open_excl()
 
-    with synth_device(
-        pe_size, data_size, writable_end_size=gpt_end_size
-    ) as synth_gpt:
-        ptable = PartitionTable.mkgpt(synth_gpt)
+    with synth_device(pe_size, data_size) as synth_bdev:
+        quiet_call(
+            ['make-bcache', '--bdev', '--data-offset-sector',
+             '%d' % pe_sectors, synth_bdev.devpath])
+        bcache_backing = BCacheBacking(synth_bdev)
+        bcache_backing.read_superblock()
+        assert bcache_backing.offset == pe_size
 
-        # -1 at end, parted geometry uses inclusive end
-        geom = parted.geometry.Geometry(
-            device=ptable.device.parted_device,
-            start=bytes_to_sector(part_start),
-            end=bytes_to_sector(device.size - gpt_end_size) - 1)
-
-        part = parted.partition.Partition(
-            disk=ptable.parted_disk, type=_ped.PARTITION_NORMAL, geometry=geom)
-        cons = parted.constraint.Constraint(exactGeom=geom)
-        ptable.parted_disk.addPartition(partition=part, constraint=cons)
-        # Don't commit to OS, we're going to tear down the device
-        ptable.parted_disk.commitToDevice()
-
-        if with_bcache:
-            with synth_device(bsb_size, data_size) as synth_bdev:
-                quiet_call(
-                    ['make-bcache', '--bdev', synth_bdev.devpath])
-                bcache_backing = BCacheBacking(synth_bdev)
-                bcache_backing.read_superblock()
-                assert bcache_backing.offset == bsb_size
-
-            dev2_fd = synth_gpt.open_excl()
-            synth_bdev.copy_to_physical(dev2_fd, shift_by=pe_size - bsb_size)
-            os.close(dev2_fd)
-            del dev2_fd
-
-    if with_bcache:
-        print('Copying the combined superblock... ', end='', flush=True)
-    else:
-        print('Copying the GPT superblock... ', end='', flush=True)
-    synth_gpt.copy_to_physical(
-        dev_fd, shift_by=-pe_size, reserved_area=data_size)
+    print('Copying the bcache superblock... ', end='', flush=True)
+    synth_bdev.copy_to_physical(dev_fd, shift_by=-pe_size)
     print('ok')
 
     os.close(dev_fd)
@@ -1159,15 +1096,10 @@ def cmd_to_bcache(args):
             file=sys.stderr)
         return 1
 
-    # TODO: use make-bcache with a custom bsb_size so that
-    # we can keep the partition-start alignment.
-    # Alignment inside the bdev doesn't change, but some partitioning
-    # tools (like parted) autodetect ptable alignment from start
-    # sectors and it would be bad to break that.
-    bsb_size = BCACHE_SB_SIZE
-
-    # So that part_start1 is sector-aligned
-    assert bsb_size % 512 == 0
+    # Detect the alignment parted would use?
+    # I don't think it can be greater than 1MiB, in which case
+    # there is no need.
+    bsb_size = 1024**2
 
     progress = CLIProgressHandler()
     ptable = PartitionTable.from_partition_device(device)
@@ -1178,7 +1110,8 @@ def cmd_to_bcache(args):
     # Make a synthetic backing device
     with synth_device(bsb_size, device.size) as synth_bdev:
         quiet_call(
-            ['make-bcache', '--bdev', synth_bdev.devpath])
+            ['make-bcache', '--bdev', '--data-offset-sector',
+             '%d' % bytes_to_sector(bsb_size), synth_bdev.devpath])
         bcache_backing = BCacheBacking(synth_bdev)
         bcache_backing.read_superblock()
         assert bcache_backing.offset == bsb_size

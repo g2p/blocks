@@ -9,7 +9,7 @@ setup(
     author_email='g2p.code+blocks@gmail.com',
     url='https://github.com/g2p/blocks',
     license='GNU GPL',
-    keywords='bcache lvm gpt storage partitioning ssd',
+    keywords='bcache lvm storage partitioning ssd',
     description='Conversion tools for block devices',
     entry_points={
         'console_scripts': [

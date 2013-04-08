@@ -26,16 +26,16 @@ The new volume group can then be merged with other volume groups using
 This is done by inserting a bcache superblock before the partition
 (resizing filesystems as necessary) then shifting the start of the
 partition.  A development version of `bcache-tools` (bcache cli
-utilities) is required:
+utilities) is required.  At runtime (but not during conversion),
+you need a kernel that reads a slightly updated bcache format:
 
 * <https://github.com/g2p/bcache-tools>
+* <https://github.com/g2p/linux/tree/bcache-for-upstream>
 
 ## LV to bcache conversion
 
 `blocks lv-to-bcache` converts a logical volume to a bcache backing
-device.  Because the current version of bcache can't use an arbitrary
-data offset, this is done by sandwitching a GPT partition table between
-the LV and the bcache device; `kpartx -a` is required to activate it.
+device.
 
 # Requirements
 
