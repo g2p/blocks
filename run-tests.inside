@@ -1,0 +1,31 @@
+#!/bin/bash
+set -ex
+
+# Start udev before running sgdisk, because it doesn't
+# run any rules for preexisting devices (not expected behavior)
+#UDEV_LOG=info \
+udevd & sleep .1
+#udevadm trigger --action=add --subsystem-match=block
+#udevadm trigger --action=change --subsystem-match=block
+#udevadm settle
+#ls -Artlh /dev/block
+
+sgdisk --new=1:1M:+127M --new=2:129M:+127M -p /dev/ubda
+udevadm settle
+#ls -Artlh /dev/block
+
+# Somehow udev breaks lvm in the next test
+udevadm control --exit
+
+mkfs.ext4 /dev/ubda1
+blocks to-lvm /dev/ubda1
+
+# We rely on /dev/block/ device names when doing ptable lookup
+# 2713e6ab0abfc47a54ccbae26be22471aef46b24, udev 165, udev_node_add
+blocks to-bcache /dev/ubda2
+
+vgchange -ay
+#ls -Artlh /dev/mapper
+
+blocks to-bcache /dev/mapper/ubda1-ubda1
+
