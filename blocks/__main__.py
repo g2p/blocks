@@ -785,7 +785,9 @@ def get_block_stack(device, progress):
 
 
 class SyntheticDevice(BlockDevice):
-    def copy_to_physical(self, dev_fd, *, shift_by=0, reserved_area=None):
+    def copy_to_physical(
+        self, dev_fd, *, shift_by=0, reserved_area=None, other_device=False
+    ):
         assert (
             len(self.data) == self.writable_hdr_size + self.writable_end_size)
         start_data = self.data[:self.writable_hdr_size]
@@ -794,6 +796,8 @@ class SyntheticDevice(BlockDevice):
         size = self.writable_hdr_size + self.rz_size + self.writable_end_size
 
         if shift_by < 0:
+            assert not other_device
+
             # Means we should rotate to the left
             # Update shift_by *after* setting wrend_offset
             shift_by += size
@@ -802,10 +806,11 @@ class SyntheticDevice(BlockDevice):
             assert shift_by >= reserved_area
             assert wrend_offset >= reserved_area
 
-        assert 0 <= shift_by < shift_by + self.writable_hdr_size <= size
-        if self.writable_end_size != 0:
-            assert 0 <= wrend_offset < (
-                wrend_offset + self.writable_end_size) <= size
+        if not other_device:
+            assert 0 <= shift_by < shift_by + self.writable_hdr_size <= size
+            if self.writable_end_size != 0:
+                assert 0 <= wrend_offset < (
+                    wrend_offset + self.writable_end_size) <= size
 
         # Write then read back
         assert os.pwrite(
@@ -1072,7 +1077,8 @@ def part_to_bcache(device, debug, progress):
 
     synth_bdev = make_bcache_sb(bsb_size, data_size)
     print('Copying the bcache superblock... ', end='', flush=True)
-    synth_bdev.copy_to_physical(dev_fd, shift_by=write_offset)
+    synth_bdev.copy_to_physical(
+        dev_fd, shift_by=write_offset, other_device=True)
     os.close(dev_fd)
     del dev_fd
     print('ok')
