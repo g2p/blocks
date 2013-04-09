@@ -111,7 +111,7 @@ def mk_dm(devname, table, readonly, exit_stack):
 
 class BlockDevice:
     def __init__(self, devpath):
-        assert os.path.exists(devpath)
+        assert os.path.exists(devpath), devpath
         self.devpath = devpath
 
     def open_excl(self):
@@ -280,6 +280,9 @@ class PartitionTable(BlockData):
             start_sector = part.geometry.end + 1
 
     def _reserve_range(self, start, end, progress):
+        import _ped
+        assert 0 <= start <= end
+
         # round down
         start_sector = start // 512
 
@@ -292,8 +295,10 @@ class PartitionTable(BlockData):
                 err = OverlappingPartition(start, end, part)
                 progress.notify_error(
                     'The range we want to reserve overlaps with '
-                    'the start of partition {}, the shrinking strategy '
-                    'will not work.'.format(part.path), err)
+                    'the start of partition {} ({}), the shrinking strategy '
+                    'will not work.'.format(
+                        part.path, _ped.partition_type_get_name(part.type)),
+                    err)
                 raise err
 
         if part is None:
@@ -311,8 +316,9 @@ class PartitionTable(BlockData):
         block_stack.reserve_end_area_verbose(part_newsize, progress)
 
     def reserve_space_before(self, part_start, length, progress):
-        start_sector, rem = divmod(part_start, 512)
-        assert rem == 0
+        assert part_start >= length, (part_start, length)
+
+        start_sector = bytes_to_sector(part_start)
 
         # Just check part_start is indeed the start of a partition
         part = self.parted_disk.getPartitionBySector(start_sector)
@@ -497,6 +503,7 @@ class LUKS(SimpleContainer):
 
 class XFS(Filesystem):
     can_shrink = False
+    resize_needs_mpoint = True
 
     def read_superblock(self):
         self.block_size = None
