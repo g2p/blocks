@@ -919,7 +919,7 @@ def rotate_lv_last_pe(*, vgname, vg_uuid, lvname, lv_uuid, size, debug):
         vgcfgname = tdname + '/vg.cfg'
         print('Loading LVM metadata... ', end='', flush=True)
         quiet_call(
-            ['vgcfgbackup', '--file', vgcfgname, '--', vgname])
+            ['lvm', 'vgcfgbackup', '--file', vgcfgname, '--', vgname])
         aug = augeas.Augeas(
             loadpath=pkg_resources.resource_filename('blocks', 'augeas'),
             root='/dev/null',
@@ -996,10 +996,10 @@ def rotate_lv_last_pe(*, vgname, vg_uuid, lvname, lv_uuid, size, debug):
             'Rotating the last extent to be the first... ',
             end='', flush=True)
         quiet_call(
-            ['vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
+            ['lvm', 'vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
         # Make sure LVM updates the mapping, this is pretty critical
         quiet_call(
-            ['lvchange', '--refresh', '--', '{}/{}'.format(vgname, lvname)])
+            ['lvm', 'lvchange', '--refresh', '--', '{}/{}'.format(vgname, lvname)])
         print('ok')
 
 
@@ -1016,7 +1016,7 @@ def make_bcache_sb(bsb_size, data_size):
 
 def lv_to_bcache(device, debug, progress):
     lv_info = subprocess.check_output(
-        'lvs --noheadings --rows --units=b --nosuffix '
+        'lvm lvs --noheadings --rows --units=b --nosuffix '
         '-o vg_name,vg_uuid,lv_name,lv_uuid,vg_extent_size --'.split()
         + [device.devpath], universal_newlines=True).splitlines()
     vgname, vg_uuid, lvname, lv_uuid, pe_size = (fi.lstrip() for fi in lv_info)
@@ -1224,14 +1224,6 @@ def cmd_to_lvm(args):
         vg_uuid = uuid.uuid1()
         lv_uuid = uuid.uuid1()
 
-        lvmcfgdir = st.enter_context(
-            tempfile.TemporaryDirectory(suffix='.lvmconf'))
-
-        with open(os.path.join(lvmcfgdir, 'lvm.conf'), 'w') as conffile:
-            conffile.write(
-               'devices {{ filter=["a/^{synth_re}$/", "r/.*/"] }}'
-                .format(synth_re=re.escape(synth_pv.devpath)))
-
         cfgf.write(textwrap.dedent(
             '''
             contents = "Text Format Volume Group"
@@ -1293,16 +1285,18 @@ def cmd_to_lvm(args):
             )))
         cfgf.flush()
 
-        # Prevent the next too commands from scanning every device (slow),
+        # Prevent the next two commands from scanning every device (slow),
         # we already know lvm should write only to the synthetic pv.
-        st.enter_context(setenv('LVM_SYSTEM_DIR', lvmcfgdir))
+        lvm_cfg = ('--config='
+                   'devices {{ filter=["a/^{synth_re}$/", "r/.*/"] }}'
+                   .format(synth_re=re.escape(synth_pv.devpath)))
 
         quiet_call(
-            ['pvcreate', '--restorefile', cfgf.name,
+            ['lvm', 'pvcreate', lvm_cfg, '--restorefile', cfgf.name,
              '--uuid', str(pv_uuid), '--zero', 'y', '--',
              synth_pv.devpath])
         quiet_call(
-            ['vgcfgrestore', '--file', cfgf.name, '--', vgname])
+            ['lvm', 'vgcfgrestore', lvm_cfg, '--file', cfgf.name, '--', vgname])
     print('ok')  # after 'Preparing LVM metadata'
 
     # Recovery: copy back the PE we had moved to the end of the device.
@@ -1323,10 +1317,10 @@ def cmd_to_lvm(args):
     print('LVM conversion successful!')
     if False:
         print('Enable the volume group with\n'
-              '    sudo vgchange -ay -- {}'.format(vgname))
+              '    sudo lvm vgchange -ay -- {}'.format(vgname))
     elif False:
         print('Enable the logical volume with\n'
-              '    sudo lvchange -ay -- {}/{}'.format(vgname, lvname))
+              '    sudo lvm lvchange -ay -- {}/{}'.format(vgname, lvname))
     else:
         print('Volume group name: {}\n'
               'Logical volume name: {}\n'
