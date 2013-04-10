@@ -910,10 +910,11 @@ def rotate_aug(aug, forward, size):
             '$lv/segment{}/dict/extent_count'.format(i))
 
     assert extent_total * pe_sectors == bytes_to_sector(size)
+    assert extent_total > 1
 
     if forward:
         # Those definitions can't be factored out,
-        # because we move nodes in the backward branch.
+        # because we move nodes and the vars would follow
         aug.defvar('first', '$lv/segment1/dict')
         # shifting segments
         for i in range(2, segment_count + 1):
@@ -921,8 +922,6 @@ def rotate_aug(aug, forward, size):
 
         # shrinking first segment by one PE
         aug.decr('$first/extent_count')
-        first_count = aug.get_int('$first/extent_count')
-        #assert first_count > 0
 
         # inserting new segment at the end
         aug.insert(
@@ -936,6 +935,7 @@ def rotate_aug(aug, forward, size):
         aug.set_int('$last/extent_count', 1)
         aug.set('$last/type/str', 'striped')
         aug.set_int('$last/stripe_count', 1)
+
         # repossessing the first segment's first PE
         aug.set(
             '$last/stripes/list/1/str',
@@ -944,6 +944,13 @@ def rotate_aug(aug, forward, size):
             '$last/stripes/list/2',
             aug.get_int('$first/stripes/list/2'))
         aug.incr('$first/stripes/list/2')
+
+        # Cleaning up an empty first PE
+        if aug.get_int('$first/extent_count') == 0:
+            aug.remove('$lv/segment1')
+            for i in range(2, segment_count + 2):
+                aug.rename('$lv/segment{}'.format(i), 'segment{}'.format(i - 1))
+            aug.decr('$lv/segment_count')
     else:
         # shifting segments
         for i in range(segment_count, 0, -1):
@@ -954,7 +961,6 @@ def rotate_aug(aug, forward, size):
         # shrinking last segment by one PE
         aug.decr('$last/extent_count')
         last_count = aug.get_int('$last/extent_count')
-        #assert last_count > 0
 
         # inserting new segment at the beginning
         aug.insert('$lv/segment2', 'segment1')
@@ -963,6 +969,7 @@ def rotate_aug(aug, forward, size):
         aug.set_int('$first/extent_count', 1)
         aug.set('$first/type/str', 'striped')
         aug.set_int('$first/stripe_count', 1)
+
         # repossessing the last segment's last PE
         aug.set(
             '$first/stripes/list/1/str',
@@ -970,6 +977,11 @@ def rotate_aug(aug, forward, size):
         aug.set_int(
             '$first/stripes/list/2',
             aug.get_int('$last/stripes/list/2') + last_count)
+
+        # Cleaning up an empty last PE
+        if last_count == 0:
+            aug.remove('$lv/segment{}'.format(segment_count + 1))
+            aug.decr('$lv/segment_count')
 
 
 def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
@@ -1033,14 +1045,14 @@ def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
         if debug:
             print('CHECK STABILITY')
             subprocess.call(
-                ['git', 'diff', '--no-index', '--patience', '--color-words',
+                ['git', '--no-pager', 'diff', '--no-index', '--patience', '--color-words',
                  '--', vgcfgname, vgcfgname + '.backagain'])
             if forward:
                 print('CHECK CORRECTNESS (forward)')
             else:
                 print('CHECK CORRECTNESS (backward)')
             subprocess.call(
-                ['git', 'diff', '--no-index', '--patience', '--color-words',
+                ['git', '--no-pager', 'diff', '--no-index', '--patience', '--color-words',
                  '--', vgcfgname, vgcfgname + '.new'])
 
         if forward:

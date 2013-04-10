@@ -62,8 +62,8 @@ blocks --debug to-bcache /dev/mapper/ubda1-ubda1
 vgcfgbackup --file after.twice ubda1
 
 # Those must be identical except for seqno and various timestamps
-git diff --no-index --patience before before.restored ||:
-git diff --no-index --patience after after.twice ||:
+git --no-pager diff --no-index --patience before before.restored ||:
+git --no-pager diff --no-index --patience after after.twice ||:
 
 coverage-3.3 report -m
 coverage-3.3 annotate
