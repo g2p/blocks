@@ -40,17 +40,6 @@ def bytes_to_sector(by):
     return sectors
 
 
-@contextlib.contextmanager
-def setenv(var, val):
-    old = os.environ.get(var)
-    os.environ[var] = val
-    yield
-    if old is not None:
-        os.environ[var] = old
-    else:
-        del os.environ[var]
-
-
 class UnsupportedSuperblock(Exception):
     def __init__(self, device):
         self.device = device
@@ -207,28 +196,6 @@ class BlockDevice:
         with open(self.ptable_sysfspath + '/dev') as fi:
             devnum = fi.read().rstrip()
         return os.path.realpath('/dev/block/' + devnum)
-
-
-class DMPartition(BlockDevice):
-    # A kpartx-style partition
-    def __init__(self, devpath):
-        super(DMPartition, self).__init__(devpath=devpath)
-        match = dm_kpartx_re.match(self.dm_table())
-        assert match, repr(self.dm_table())
-        self.ptable_sysfspath = (
-            '/sys/dev/block/{major}:{minor}'.format(**match.groupdict()))
-        self.part_start = int(match.group('offset')) * 512
-        self.is_partition = True
-
-    @classmethod
-    def kpartx_singleton(cls, parent):
-        out = subprocess.check_output(
-            'kpartx -avr --'.split() + [parent.devpath]
-        ).decode('ascii').splitlines()
-        assert len(out) == 1
-        out, = out
-        dmname = out.replace('add map ', '').split()[0]
-        return cls('/dev/mapper/' + dmname)
 
 
 class PartitionedDevice(BlockDevice):
