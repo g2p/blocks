@@ -16,6 +16,8 @@ function blocks {
     coverage-3.3 run --append --source=blocks -m blocks "$@"
 }
 
+! blocks
+
 sgdisk --new=1:1M:+127M --new=2:129M:+127M -p /dev/ubda
 udevadm settle
 #ls -Artlh /dev/block
@@ -25,15 +27,19 @@ udevadm control --exit
 
 mkfs.ext4 /dev/ubda1
 blocks to-lvm /dev/ubda1
+! blocks to-lvm /dev/ubda1
 
 # We rely on /dev/block/ device names when doing ptable lookup
 # 2713e6ab0abfc47a54ccbae26be22471aef46b24, udev 165, udev_node_add
 blocks to-bcache /dev/ubda2
+! blocks to-bcache /dev/ubda2
 
 vgchange -ay
 #ls -Artlh /dev/mapper
 
 blocks to-bcache /dev/mapper/ubda1-ubda1
+! blocks to-bcache /dev/mapper/ubda1-ubda1
 
 coverage-3.3 report -m
+coverage-3.3 annotate
 
