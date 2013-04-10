@@ -124,9 +124,13 @@ class BlockDevice:
 
     @memoized_property
     def superblock_type(self):
-        return subprocess.check_output(
-            'blkid -o value -s TYPE --'.split() + [self.devpath]
-        ).rstrip().decode('ascii')
+        try:
+            return subprocess.check_output(
+                'blkid -o value -s TYPE --'.split() + [self.devpath]
+            ).rstrip().decode('ascii')
+        except subprocess.CalledProcessError as err:
+            # No recognised superblock
+            assert err.returncode == 2, err
 
     @memoized_property
     def has_bcache_superblock(self):
@@ -749,9 +753,12 @@ def get_block_stack(device, progress):
             stack.append(XFS(device))
         else:
             err = UnsupportedSuperblock(device=device)
-            progress.notify_error(
-                'Unsupported superblock type: {}'
-                .format(err.device.superblock_type), err)
+            if device.superblock_type is None:
+                progress.notify_error('Unrecognised superblock', err)
+            else:
+                progress.notify_error(
+                    'Unsupported superblock type: {}'
+                    .format(err.device.superblock_type), err)
             raise err
 
         # only reached when we ended on a filesystem
