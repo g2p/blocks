@@ -124,9 +124,13 @@ class BlockDevice:
 
     @memoized_property
     def superblock_type(self):
+        return self.superblock_at(0)
+
+    def superblock_at(self, offset):
         try:
             return subprocess.check_output(
-                'blkid -o value -s TYPE --'.split() + [self.devpath]
+                'blkid -p -o value -s TYPE -O'.split()
+                + ['%d' % offset, '--', self.devpath]
             ).rstrip().decode('ascii')
         except subprocess.CalledProcessError as err:
             # No recognised superblock
@@ -889,24 +893,123 @@ def synth_device(writable_hdr_size, rz_size, writable_end_size=0):
         synth.writable_end_size = writable_end_size
 
 
-def rotate_lv_last_pe(*, vgname, vg_uuid, lvname, lv_uuid, size, debug):
-    """Move the last physical extent of a LV to the start,
+def rotate_aug(aug, forward, size):
+    segment_count = aug.get_int('$lv/segment_count')
+    pe_sectors = aug.get_int('$vg/extent_size')
+    extent_total = 0
+
+    aug.incr('$lv/segment_count')
+
+    # checking all segments are linear
+    for i in range(1, segment_count + 1):
+        assert aug.get(
+            '$lv/segment{}/dict/type/str'.format(i)) == 'striped'
+        assert aug.get_int(
+            '$lv/segment{}/dict/stripe_count'.format(i)) == 1
+        extent_total += aug.get_int(
+            '$lv/segment{}/dict/extent_count'.format(i))
+
+    assert extent_total * pe_sectors == bytes_to_sector(size)
+
+    if forward:
+        # Those definitions can't be factored out,
+        # because we move nodes in the backward branch.
+        aug.defvar('first', '$lv/segment1/dict')
+        # shifting segments
+        for i in range(2, segment_count + 1):
+            aug.decr('$lv/segment{}/dict/start_extent'.format(i))
+
+        # shrinking first segment by one PE
+        aug.decr('$first/extent_count')
+        first_count = aug.get_int('$first/extent_count')
+        #assert first_count > 0
+
+        # inserting new segment at the end
+        aug.insert(
+            '$lv/segment{}'.format(segment_count),
+            'segment{}'.format(segment_count + 1),
+            before=False)
+        aug.set_int(
+            '$lv/segment{}/dict/start_extent'.format(segment_count + 1),
+            extent_total - 1)
+        aug.defvar('last', '$lv/segment{}/dict'.format(segment_count + 1))
+        aug.set_int('$last/extent_count', 1)
+        aug.set('$last/type/str', 'striped')
+        aug.set_int('$last/stripe_count', 1)
+        # repossessing the first segment's first PE
+        aug.set(
+            '$last/stripes/list/1/str',
+            aug.get('$first/stripes/list/1/str'))
+        aug.set_int(
+            '$last/stripes/list/2',
+            aug.get_int('$first/stripes/list/2'))
+        aug.incr('$first/stripes/list/2')
+    else:
+        # shifting segments
+        for i in range(segment_count, 0, -1):
+            aug.incr('$lv/segment{}/dict/start_extent'.format(i))
+            aug.rename('$lv/segment{}'.format(i), 'segment{}'.format(i + 1))
+        aug.defvar('last', '$lv/segment{}/dict'.format(segment_count + 1))
+
+        # shrinking last segment by one PE
+        aug.decr('$last/extent_count')
+        last_count = aug.get_int('$last/extent_count')
+        #assert last_count > 0
+
+        # inserting new segment at the beginning
+        aug.insert('$lv/segment2', 'segment1')
+        aug.set_int('$lv/segment1/dict/start_extent', 0)
+        aug.defvar('first', '$lv/segment1/dict')
+        aug.set_int('$first/extent_count', 1)
+        aug.set('$first/type/str', 'striped')
+        aug.set_int('$first/stripe_count', 1)
+        # repossessing the last segment's last PE
+        aug.set(
+            '$first/stripes/list/1/str',
+            aug.get('$last/stripes/list/1/str'))
+        aug.set_int(
+            '$first/stripes/list/2',
+            aug.get_int('$last/stripes/list/2') + last_count)
+
+
+def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
+    """Rotate a logical volume by a single PE.
+
+    If forward:
+        Move the first physical extent of an LV to the end
+    else:
+        Move the last physical extent of a LV to the start
+
     then poke LVM to refresh the mapping.
     """
 
     import augeas
+    class Augeas(augeas.Augeas):
+        def get_int(self, key):
+            return int(self.get(key + '/int'))
+
+        def set_int(self, key, val):
+            return self.set(key + '/int', '%d' % val)
+
+        def incr(self, key, by=1):
+            orig = self.get_int(key)
+            self.set_int(key, orig + by)
+
+        def decr(self, key):
+            self.incr(key, by=-1)
 
     with tempfile.TemporaryDirectory(suffix='.blocks') as tdname:
         vgcfgname = tdname + '/vg.cfg'
         print('Loading LVM metadata... ', end='', flush=True)
         quiet_call(
             ['lvm', 'vgcfgbackup', '--file', vgcfgname, '--', vgname])
-        aug = augeas.Augeas(
+        aug = Augeas(
             loadpath=pkg_resources.resource_filename('blocks', 'augeas'),
             root='/dev/null',
             flags=augeas.Augeas.NO_MODL_AUTOLOAD | augeas.Augeas.SAVE_NEWFILE)
         vgcfg = open(vgcfgname)
-        aug.set('/raw/vgcfg', vgcfg.read())
+        vgcfg_orig = vgcfg.read()
+        aug.set('/raw/vgcfg', vgcfg_orig)
 
         aug.text_store('LVM.lns', '/raw/vgcfg', '/vg')
         print('ok')
@@ -919,63 +1022,35 @@ def rotate_lv_last_pe(*, vgname, vg_uuid, lvname, lv_uuid, size, debug):
         assert aug.get('$vg/id/str') == vg_uuid
         aug.defvar('lv', '$vg/logical_volumes/dict/{}/dict'.format(lvname))
         assert aug.get('$lv/id/str') == lv_uuid
-        segment_count = int(aug.get('$lv/segment_count/int'))
-        pe_sectors = int(aug.get('$vg/extent_size/int'))
-        extent_total = 0
 
-        # checking all segments are linear
-        for i in range(1, segment_count + 1):
-            assert aug.get(
-                '$lv/segment{}/dict/type/str'.format(i)) == 'striped'
-            assert int(aug.get(
-                '$lv/segment{}/dict/stripe_count/int'.format(i))) == 1
-            extent_total += int(aug.get(
-                '$lv/segment{}/dict/extent_count/int'.format(i)))
-
-        assert extent_total * pe_sectors == bytes_to_sector(size)
-
-        # shifting segments
-        aug.set('$lv/segment_count/int', '%d' % (segment_count + 1))
-        for i in range(segment_count, 0, -1):
-            aug.set(
-                '$lv/segment{}/dict/start_extent/int'.format(i),
-                '%d' % (int(aug.get(
-                    '$lv/segment{}/dict/start_extent/int'.format(i))) + 1))
-            aug.rename('$lv/segment{}'.format(i), 'segment{}'.format(i + 1))
-
-        aug.defvar('last', '$lv/segment{}/dict'.format(segment_count + 1))
-
-        # shrinking last segment by one PE
-        last_count = int(aug.get('$last/extent_count/int'))
-        last_count -= 1
-        assert last_count > 0
-        aug.set('$last/extent_count/int', '%d' % last_count)
-
-        # inserting new segment at the beginning
-        aug.insert('$lv/segment2', 'segment1')
-        aug.set('$lv/segment1/dict/start_extent/int', '%d' % 0)
-        aug.set('$lv/segment1/dict/extent_count/int', '%d' % 1)
-        aug.set('$lv/segment1/dict/type/str', 'striped')
-        aug.set('$lv/segment1/dict/stripe_count/int', '%d' % 1)
-        # repossessing the last segment's last PE
-        aug.set(
-            '$lv/segment1/dict/stripes/list/1/str',
-            aug.get('$last/stripes/list/1/str'))
-        aug.set(
-            '$lv/segment1/dict/stripes/list/2/int',
-            '%d' % (int(aug.get('$last/stripes/list/2/int')) + last_count))
-
+        rotate_aug(aug, forward, size)
         aug.text_retrieve('LVM.lns', '/raw/vgcfg', '/vg', '/raw/vgcfg.new')
         open(vgcfgname + '.new', 'w').write(aug.get('/raw/vgcfg.new'))
+        rotate_aug(aug, not forward, size)
+        aug.text_retrieve('LVM.lns', '/raw/vgcfg', '/vg', '/raw/vgcfg.backagain')
+        open(vgcfgname + '.backagain', 'w').write(aug.get('/raw/vgcfg.backagain'))
 
         if debug:
+            print('CHECK STABILITY')
+            subprocess.call(
+                ['git', 'diff', '--no-index', '--patience', '--color-words',
+                 '--', vgcfgname, vgcfgname + '.backagain'])
+            if forward:
+                print('CHECK CORRECTNESS (forward)')
+            else:
+                print('CHECK CORRECTNESS (backward)')
             subprocess.call(
                 ['git', 'diff', '--no-index', '--patience', '--color-words',
                  '--', vgcfgname, vgcfgname + '.new'])
 
-        print(
-            'Rotating the last extent to be the first... ',
-            end='', flush=True)
+        if forward:
+            print(
+                'Rotating the second extent to be the first... ',
+                end='', flush=True)
+        else:
+            print(
+                'Rotating the last extent to be the first... ',
+                end='', flush=True)
         quiet_call(
             ['lvm', 'vgcfgrestore', '--file', vgcfgname + '.new', '--', vgname])
         # Make sure LVM updates the mapping, this is pretty critical
@@ -1022,10 +1097,10 @@ def lv_to_bcache(device, debug, progress):
     os.close(dev_fd)
     del dev_fd
 
-    rotate_lv_last_pe(
+    rotate_lv(
         vgname=vgname, vg_uuid=vg_uuid,
         lvname=lvname, lv_uuid=lv_uuid,
-        size=device.size, debug=debug)
+        size=device.size, debug=debug, forward=False)
 
 
 def part_to_bcache(device, debug, progress):
@@ -1095,6 +1170,15 @@ def main():
     sp_to_bcache.add_argument('device')
     sp_to_bcache.set_defaults(action=cmd_to_bcache)
 
+    # Undoes an lv to bcache conversion; useful to migrate from the GPT
+    # format to the bcache-offset format.
+    # No help, keep this undocumented for now
+    sp_rotate = commands.add_parser(
+        'rotate')
+        #help='Rotate LV contents to start at the second PE')
+    sp_rotate.add_argument('device')
+    sp_rotate.set_defaults(action=cmd_rotate)
+
     # Give help when no subcommand is given
     if not sys.argv[1:]:
         parser.print_help()
@@ -1102,6 +1186,28 @@ def main():
 
     args = parser.parse_args()
     return args.action(args)
+
+
+def cmd_rotate(args):
+    device = BlockDevice(args.device)
+    debug = args.debug
+    progress = CLIProgressHandler()
+
+    lv_info = subprocess.check_output(
+        'lvm lvs --noheadings --rows --units=b --nosuffix '
+        '-o vg_name,vg_uuid,lv_name,lv_uuid,vg_extent_size --'.split()
+        + [device.devpath], universal_newlines=True).splitlines()
+    vgname, vg_uuid, lvname, lv_uuid, pe_size = (fi.lstrip() for fi in lv_info)
+    pe_size = int(pe_size)
+
+    if device.superblock_at(pe_size) is None:
+        print('No superblock on the second PE, exiting', file=sys.stderr)
+        return 1
+
+    rotate_lv(
+        vgname=vgname, vg_uuid=vg_uuid,
+        lvname=lvname, lv_uuid=lv_uuid,
+        size=device.size, debug=debug, forward=True)
 
 
 def cmd_to_bcache(args):

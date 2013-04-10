@@ -30,7 +30,7 @@ mkfs.ext4 /dev/ubda1
 blocks to-lvm /dev/ubda1
 ! blocks to-lvm /dev/ubda1
 
-# We rely on /dev/block/ device names when doing ptable lookup
+# Relies on /dev/block/ device names when doing ptable lookup
 # 2713e6ab0abfc47a54ccbae26be22471aef46b24, udev 165, udev_node_add
 blocks to-bcache /dev/ubda2
 ! blocks to-bcache /dev/ubda2
@@ -51,8 +51,19 @@ blocks to-bcache /dev/ubda4
 vgchange -ay
 #ls -Artlh /dev/mapper
 
-blocks to-bcache /dev/mapper/ubda1-ubda1
+vgcfgbackup --file before ubda1
+blocks --debug to-bcache /dev/mapper/ubda1-ubda1
+vgcfgbackup --file after ubda1
 ! blocks to-bcache /dev/mapper/ubda1-ubda1
+blocks --debug rotate /dev/mapper/ubda1-ubda1
+vgcfgbackup --file before.restored ubda1
+! blocks rotate /dev/mapper/ubda1-ubda1
+blocks --debug to-bcache /dev/mapper/ubda1-ubda1
+vgcfgbackup --file after.twice ubda1
+
+# Those must be identical except for seqno and various timestamps
+git diff --no-index --patience before before.restored ||:
+git diff --no-index --patience after after.twice ||:
 
 coverage-3.3 report -m
 coverage-3.3 annotate
