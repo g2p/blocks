@@ -18,7 +18,8 @@ function blocks {
 
 ! blocks
 
-sgdisk --new=1:1M:+127M --new=2:129M:+127M -p /dev/ubda
+sgdisk --new=1:1M:+127M --new=2:129M:+127M \
+    --new=3:256M:+128M --new=4:384M:+128M -p /dev/ubda
 udevadm settle
 #ls -Artlh /dev/block
 
@@ -33,6 +34,19 @@ blocks to-lvm /dev/ubda1
 # 2713e6ab0abfc47a54ccbae26be22471aef46b24, udev 165, udev_node_add
 blocks to-bcache /dev/ubda2
 ! blocks to-bcache /dev/ubda2
+
+# Can't shrink an unrecognised partition
+! blocks to-bcache /dev/ubda4
+#mkfs.btrfs /dev/ubda3
+# Fails, but _BHRfS_M does appear in the strace, what drugs is blkid on?
+#strace -s1024 -f blkid -p -c /dev/null /dev/ubda3
+# ReiserFS has too much interactivity
+#mkfs.reiserfs /dev/ubda3
+mkfs.nilfs2 -B 1024 /dev/ubda3
+blkid /dev/ubda3
+
+blocks to-bcache /dev/ubda4
+! blocks to-bcache /dev/ubda4
 
 vgchange -ay
 #ls -Artlh /dev/mapper
