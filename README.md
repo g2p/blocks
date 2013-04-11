@@ -78,7 +78,8 @@ If `blocks` isn't in the shell's command path, replace with:
 
 Don't forget to update `/etc/fstab` (no change is needed if filesystems
 are mounted by uuid). If necessary, rebuild the grub config (grub2 needs
-to install some modules to boot to LVM directly) and your initramfs.
+to install some modules if /boot is within a logical volume) and your
+initramfs.
 
 # Usage (bcache conversion)
 
