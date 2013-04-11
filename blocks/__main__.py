@@ -1071,18 +1071,20 @@ def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
         print('ok')
 
 
-def make_bcache_sb(bsb_size, data_size):
+def make_bcache_sb(bsb_size, data_size, join):
     with synth_device(bsb_size, data_size) as synth_bdev:
-        quiet_call(
-            ['make-bcache', '--bdev', '--data-offset-sectors',
-             '%d' % bytes_to_sector(bsb_size), synth_bdev.devpath])
+        cmd = ['make-bcache', '--bdev', '--data-offset-sectors',
+               '%d' % bytes_to_sector(bsb_size), synth_bdev.devpath]
+        if join is not None:
+            cmd[1:1] = ['--cset-uuid', join]
+        quiet_call(cmd)
         bcache_backing = BCacheBacking(synth_bdev)
         bcache_backing.read_superblock()
         assert bcache_backing.offset == bsb_size
     return synth_bdev
 
 
-def lv_to_bcache(device, debug, progress):
+def lv_to_bcache(device, debug, progress, join):
     lv_info = subprocess.check_output(
         'lvm lvs --noheadings --rows --units=b --nosuffix '
         '-o vg_name,vg_uuid,lv_name,lv_uuid,vg_extent_size --'.split()
@@ -1101,7 +1103,7 @@ def lv_to_bcache(device, debug, progress):
 
     dev_fd = device.open_excl()
 
-    synth_bdev = make_bcache_sb(pe_size, data_size)
+    synth_bdev = make_bcache_sb(pe_size, data_size, join)
     print('Copying the bcache superblock... ', end='', flush=True)
     synth_bdev.copy_to_physical(dev_fd, shift_by=-pe_size)
     print('ok')
@@ -1115,7 +1117,7 @@ def lv_to_bcache(device, debug, progress):
         size=device.size, debug=debug, forward=False)
 
 
-def part_to_bcache(device, debug, progress):
+def part_to_bcache(device, debug, progress, join):
     # Detect the alignment parted would use?
     # I don't think it can be greater than 1MiB, in which case
     # there is no need.
@@ -1143,7 +1145,7 @@ def part_to_bcache(device, debug, progress):
             file=sys.stderr)
         return 1
 
-    synth_bdev = make_bcache_sb(bsb_size, data_size)
+    synth_bdev = make_bcache_sb(bsb_size, data_size, join)
     print('Copying the bcache superblock... ', end='', flush=True)
     synth_bdev.copy_to_physical(
         dev_fd, shift_by=write_offset, other_device=True)
@@ -1180,6 +1182,7 @@ def main():
         'to-bcache',
         help='Convert a block device to use bcache')
     sp_to_bcache.add_argument('device')
+    sp_to_bcache.add_argument('--join', metavar='CSET-UUID')
     sp_to_bcache.set_defaults(action=cmd_to_bcache)
 
     # Undoes an lv to bcache conversion; useful to migrate from the GPT
@@ -1225,6 +1228,7 @@ def cmd_rotate(args):
 def cmd_to_bcache(args):
     device = BlockDevice(args.device)
     debug = args.debug
+    join = args.join
     progress = CLIProgressHandler()
 
     if device.has_bcache_superblock:
@@ -1234,9 +1238,9 @@ def cmd_to_bcache(args):
         return 1
 
     if device.is_partition:
-        return part_to_bcache(device, debug, progress)
+        return part_to_bcache(device, debug, progress, join)
     elif device.is_dm:
-        return lv_to_bcache(device, debug, progress)
+        return lv_to_bcache(device, debug, progress, join)
     else:
         print(
             'Device {} is not a partition or a logical volume'
