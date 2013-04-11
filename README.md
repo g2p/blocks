@@ -40,7 +40,7 @@ libaugeas (library only, 1.0 or newer).
 On Debian/Ubuntu (raring is recommended):
 
     sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0 \
-        pkg-config libpython3.3-dev
+        pkg-config libpython3.3-dev gcc
     sudo aptitude install cryptsetup lvm2 \
         nilfs-tools reiserfsprogs xfsprogs e2fsprogs  # optional
     type pip-3.3 || alias pip-3.3='python3.3 -m pip.runner'
@@ -73,4 +73,21 @@ If `blocks` isn't in the shell's command path, replace with:
 Don't forget to update `/etc/fstab` (no change is needed if filesystems
 are mounted by uuid). If necessary, rebuild the grub config (grub2 needs
 to install some modules to boot to LVM directly) and your initramfs.
+
+# Usage (bcache conversion)
+
+    blocks --help
+    blocks to-bcache --help
+    sudo blocks to-bcache /dev/sdaN
+    # Or
+    sudo blocks to-bcache /dev/VG/LV
+
+When converting to bcache, keep in mind you need the development kernel
+given above.  If you convert your root filesystem, you need to
+re-run update-initramfs after installing bcache-tools from the above
+link.  Finally, when converting your root filesystem from a logical
+volume, make sure grub.cfg doesn't reference the root filesystem using
+its volume path in the kernel command-line.  `root=UUID=<UUID>` works,
+and `root=/dev/bcache0` will also work if you have a single bcache
+volume.
 
