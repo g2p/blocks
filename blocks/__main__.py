@@ -1010,6 +1010,10 @@ def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
         def decr(self, key):
             self.incr(key, by=-1)
 
+    # Make sure the volume isn't in use by unmapping it
+    quiet_call(
+        ['lvm', 'lvchange', '-an', '--', '{}/{}'.format(vgname, lvname)])
+
     with tempfile.TemporaryDirectory(suffix='.blocks') as tdname:
         vgcfgname = tdname + '/vg.cfg'
         print('Loading LVM metadata... ', end='', flush=True)
