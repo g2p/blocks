@@ -7,25 +7,28 @@ witout moving data.  `blocks` shuffles blocks and sprouts superblocks.
 
 ## LVM conversion
 
-`blocks to-lvm` takes a partition containing a filesystem, shrinks the
-filesystem by a small amount, and converts the partition to LVM in
-place.  LVM gives you extra flexibility by allowing you to grow the
-filesystem to multiple disks or to follow up with an in-place RAID
-conversion.
+`blocks to-lvm` takes a block device (partition or whole disk)
+containing a filesystem, shrinks the filesystem by a small amount, and
+converts it to LVM in place.
 
-A new volume group is created, the partition is converted to a physical
-volume and the filesystem is converted to a logical volume.
+The block device is converted to a physical volume and the filesystem is
+converted to a logical volume.  If `--join=<VG>` is used the volumes
+join an existing volume group.
 
-The new volume group can then be merged with other volume groups using
-`vgmerge`, or extended with `vgextend`.  RAID can be enabled with
-`lvconvert`.
+An LVM conversion can be followed by other changes to the volume,
+growing it to multiple disks with `vgextend` and `lvextend`, or
+converting it to various RAID levels with `lvconvert --type=raidN
+-m<extra-copies>`.
 
 ## bcache conversion
 
 `blocks to-bcache` converts a block device (partition or logical
-volume) to use bcache.  A development version of the bcache cli
-utilities is required.  At runtime (but not during conversion), you
-need a kernel that reads a slightly updated bcache format:
+volume) to use bcache.  If `--join=<cset>` is used the device joins an
+existing cache set.
+
+A development version of the bcache cli utilities is required.  At
+runtime (but not during conversion), you need a kernel that reads a
+slightly updated bcache format:
 
 * <https://github.com/g2p/bcache-tools>
 * <https://github.com/g2p/linux/tree/bcache-for-upstream>
