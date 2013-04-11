@@ -1,6 +1,9 @@
 #!/bin/bash
 set -ex
 
+mount -t tmpfs tmpfs /etc/lvm/archive
+mount -t tmpfs tmpfs /etc/lvm/backup
+
 # Start udev before running sgdisk, because it doesn't
 # run any rules for preexisting devices (not expected behavior)
 #UDEV_LOG=info \
@@ -19,7 +22,7 @@ function blocks {
 ! blocks
 
 sgdisk --new=1:1M:+127M --new=2:129M:+127M \
-    --new=3:256M:+128M --new=4:384M:+128M -p /dev/ubda
+    --new=3:256M:+128M --new=4:384M:+128M --new=5:512M:+128M -p /dev/ubda
 udevadm settle
 #ls -Artlh /dev/block
 
@@ -27,8 +30,12 @@ udevadm settle
 udevadm control --exit
 
 mkfs.ext4 /dev/ubda1
-blocks to-lvm /dev/ubda1
+blocks to-lvm /dev/ubda1 --vg-name=VG
 ! blocks to-lvm /dev/ubda1
+
+mkfs.ext4 /dev/ubda5
+blocks to-lvm /dev/ubda5 --join=VG
+! blocks to-lvm /dev/ubda5
 
 # Relies on /dev/block/ device names when doing ptable lookup
 # 2713e6ab0abfc47a54ccbae26be22471aef46b24, udev 165, udev_node_add
@@ -51,15 +58,19 @@ blocks to-bcache /dev/ubda4
 vgchange -ay
 #ls -Artlh /dev/mapper
 
-vgcfgbackup --file before ubda1
-blocks --debug to-bcache /dev/mapper/ubda1-ubda1
-vgcfgbackup --file after ubda1
-! blocks to-bcache /dev/mapper/ubda1-ubda1
-blocks --debug rotate /dev/mapper/ubda1-ubda1
-vgcfgbackup --file before.restored ubda1
-! blocks rotate /dev/mapper/ubda1-ubda1
-blocks --debug to-bcache /dev/mapper/ubda1-ubda1
-vgcfgbackup --file after.twice ubda1
+vgcfgbackup --file before VG
+blkid /dev/mapper/VG-ubda1
+blocks --debug to-bcache /dev/mapper/VG-ubda1
+vgcfgbackup --file after VG
+bcache-super-show /dev/mapper/VG-ubda1
+! blocks to-bcache /dev/mapper/VG-ubda1
+blocks --debug rotate /dev/mapper/VG-ubda1
+vgcfgbackup --file before.restored VG
+! blocks rotate /dev/mapper/VG-ubda1
+lvchange --refresh VG/ubda1
+blkid /dev/mapper/VG-ubda1
+blocks --debug to-bcache /dev/mapper/VG-ubda1
+vgcfgbackup --file after.twice VG
 
 # Those must be identical except for seqno and various timestamps
 git --no-pager diff --no-index --patience before before.restored ||:

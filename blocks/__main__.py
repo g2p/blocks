@@ -984,7 +984,7 @@ def rotate_aug(aug, forward, size):
             aug.decr('$lv/segment_count')
 
 
-def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
+def rotate_lv(*, device, size, debug, forward):
     """Rotate a logical volume by a single PE.
 
     If forward:
@@ -1009,6 +1009,13 @@ def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
 
         def decr(self, key):
             self.incr(key, by=-1)
+
+    lv_info = subprocess.check_output(
+        'lvm lvs --noheadings --rows --units=b --nosuffix '
+        '-o vg_name,vg_uuid,lv_name,lv_uuid,lv_attr --'.split()
+        + [device.devpath], universal_newlines=True).splitlines()
+    vgname, vg_uuid, lvname, lv_uuid, lv_attr = (fi.lstrip() for fi in lv_info)
+    active = lv_attr[4] == 'a'
 
     # Make sure the volume isn't in use by unmapping it
     quiet_call(
@@ -1072,6 +1079,9 @@ def rotate_lv(*, vgname, vg_uuid, lvname, lv_uuid, size, debug, forward):
         # Make sure LVM updates the mapping, this is pretty critical
         quiet_call(
             ['lvm', 'lvchange', '--refresh', '--', '{}/{}'.format(vgname, lvname)])
+        if active:
+            quiet_call(
+                ['lvm', 'lvchange', '-ay', '--', '{}/{}'.format(vgname, lvname)])
         print('ok')
 
 
@@ -1089,12 +1099,10 @@ def make_bcache_sb(bsb_size, data_size, join):
 
 
 def lv_to_bcache(device, debug, progress, join):
-    lv_info = subprocess.check_output(
+    pe_size = int(subprocess.check_output(
         'lvm lvs --noheadings --rows --units=b --nosuffix '
-        '-o vg_name,vg_uuid,lv_name,lv_uuid,vg_extent_size --'.split()
-        + [device.devpath], universal_newlines=True).splitlines()
-    vgname, vg_uuid, lvname, lv_uuid, pe_size = (fi.lstrip() for fi in lv_info)
-    pe_size = int(pe_size)
+        '-o vg_extent_size --'.split()
+        + [device.devpath], universal_newlines=True))
 
     assert device.size % pe_size == 0
     data_size = device.size - pe_size
@@ -1116,9 +1124,7 @@ def lv_to_bcache(device, debug, progress, join):
     del dev_fd
 
     rotate_lv(
-        vgname=vgname, vg_uuid=vg_uuid,
-        lvname=lvname, lv_uuid=lv_uuid,
-        size=device.size, debug=debug, forward=False)
+        device=device, size=device.size, debug=debug, forward=False)
 
 
 def part_to_bcache(device, debug, progress, join):
@@ -1179,7 +1185,9 @@ def main():
         'to-lvm',
         help='Convert to LVM')
     sp_to_lvm.add_argument('device')
-    sp_to_lvm.add_argument('--vg-name', dest='vgname', type=str)
+    vg_flags = sp_to_lvm.add_mutually_exclusive_group()
+    vg_flags.add_argument('--vg-name', dest='vgname', type=str)
+    vg_flags.add_argument('--join', metavar='VG-NAME-OR-UUID')
     sp_to_lvm.set_defaults(action=cmd_to_lvm)
 
     sp_to_bcache = commands.add_parser(
@@ -1212,21 +1220,17 @@ def cmd_rotate(args):
     debug = args.debug
     progress = CLIProgressHandler()
 
-    lv_info = subprocess.check_output(
+    pe_size = int(subprocess.check_output(
         'lvm lvs --noheadings --rows --units=b --nosuffix '
-        '-o vg_name,vg_uuid,lv_name,lv_uuid,vg_extent_size --'.split()
-        + [device.devpath], universal_newlines=True).splitlines()
-    vgname, vg_uuid, lvname, lv_uuid, pe_size = (fi.lstrip() for fi in lv_info)
-    pe_size = int(pe_size)
+        '-o vg_extent_size --'.split()
+        + [device.devpath], universal_newlines=True))
 
     if device.superblock_at(pe_size) is None:
         print('No superblock on the second PE, exiting', file=sys.stderr)
         return 1
 
     rotate_lv(
-        vgname=vgname, vg_uuid=vg_uuid,
-        lvname=lvname, lv_uuid=lv_uuid,
-        size=device.size, debug=debug, forward=True)
+        device=device, size=device.size, debug=debug, forward=True)
 
 
 def cmd_to_bcache(args):
@@ -1257,14 +1261,26 @@ def cmd_to_lvm(args):
     device = BlockDevice(args.device)
     debug = args.debug
 
-    if args.vgname is not None:
+    if args.join is not None:
+        vg_info = subprocess.check_output(
+            'lvm vgs --noheadings --rows --units=b --nosuffix '
+            '-o vg_name,vg_uuid,vg_extent_size --'.split()
+            + [args.join], universal_newlines=True).splitlines()
+        join_name, join_uuid, pe_size = (fi.lstrip() for fi in vg_info)
+        # Pick something unique, temporary until vgmerge
+        vgname = uuid.uuid1().hex
+        pe_size = int(pe_size)
+    elif args.vgname is not None:
+        # Check no VG with that name exists?
+        # No real need, vgrename uuid newname would fix any collision
         vgname = args.vgname
+        pe_size = LVM_PE_SIZE
     else:
         vgname = os.path.basename(device.devpath)
+        pe_size = LVM_PE_SIZE
+
     assert vgname
     assert all(ch in ASCII_ALNUM_WHITELIST for ch in vgname)
-    # TODO: check no VG with that name exists?
-    # Anyway, vgrename uuid newname should fix any problems
 
     assert device.size % 512 == 0
 
@@ -1280,10 +1296,9 @@ def cmd_to_lvm(args):
     if block_stack.fslabel:
         lvname = block_stack.fslabel
     else:
-        lvname = vgname
+        lvname = os.path.basename(device.devpath)
     assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname)
 
-    pe_size = LVM_PE_SIZE
     pe_sectors = bytes_to_sector(pe_size)
     # -1 because we reserve pe_size for the lvm label and one metadata area
     pe_count = device.size // pe_size - 1
@@ -1422,6 +1437,10 @@ def cmd_to_lvm(args):
     del dev_fd
 
     print('LVM conversion successful!')
+    if args.join is not None:
+        quiet_call(
+            ['lvm', 'vgmerge', '--', join_name, vgname])
+        vgname = join_name
     if False:
         print('Enable the volume group with\n'
               '    sudo lvm vgchange -ay -- {}'.format(vgname))
