@@ -22,6 +22,9 @@ converting it to various RAID levels with `lvconvert --type=raidN
 
 ## bcache conversion
 
+**The extended bcache format we need is changing while being merged upstream.
+Please wait a few days before making bcache conversions.**
+
 `blocks to-bcache` converts a block device (partition or logical
 volume) to use bcache.  If `--join=<cset>` is used the device joins an
 existing cache set.
