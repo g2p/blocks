@@ -1087,7 +1087,7 @@ def rotate_lv(*, device, size, debug, forward):
 
 def make_bcache_sb(bsb_size, data_size, join):
     with synth_device(bsb_size, data_size) as synth_bdev:
-        cmd = ['make-bcache', '--bdev', '--data-offset-sectors',
+        cmd = ['make-bcache', '--bdev', '--data-offset',
                '%d' % bytes_to_sector(bsb_size), synth_bdev.devpath]
         if join is not None:
             cmd[1:1] = ['--cset-uuid', join]
