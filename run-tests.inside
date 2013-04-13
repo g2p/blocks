@@ -35,6 +35,23 @@ mkfs.ext4 /dev/ubda1
 blocks to-lvm /dev/ubda1 --vg-name=VG
 ! blocks to-lvm /dev/ubda1
 
+dd if=/dev/urandom of=keyfile bs=64k count=1
+cryptsetup --batch-mode luksFormat /dev/ubda1 keyfile
+cryptsetup luksOpen --key-file=keyfile /dev/ubda1 whispers
+mkfs.ext4 /dev/mapper/whispers
+blocks to-lvm /dev/ubda1
+
+# go back to unencrypted, otherwise some tests would ask for passphrases
+mkfs.ext4 /dev/ubda1
+# resize should require fsck if the fs has been mounted
+# XXX doesn't check in practice
+mkdir -p mnt
+mount /dev/ubda1 mnt
+touch mnt/ts
+umount mnt
+blocks to-lvm /dev/ubda1 --vg-name=VG
+! blocks to-lvm /dev/ubda1
+
 vgchange -ay
 blocks resize --resize-device /dev/mapper/VG-ubda1 64M
 # will round up
@@ -60,10 +77,11 @@ blocks to-bcache /dev/ubda2
 # Can't shrink an unrecognised partition
 ! blocks to-bcache /dev/ubda4
 #mkfs.btrfs /dev/ubda3
-# Fails, but _BHRfS_M does appear in the strace, what drugs is blkid on?
+# Btrfs sb identification fails, but _BHRfS_M does appear
+# in the strace, what drugs is blkid on?
 #strace -s1024 -f blkid -p -c /dev/null /dev/ubda3
 # ReiserFS has too much interactivity
-#mkfs.reiserfs /dev/ubda3
+#mkfs.reiserfs -q /dev/ubda3
 mkfs.nilfs2 -B 1024 /dev/ubda3
 blkid /dev/ubda3
 
