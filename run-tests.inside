@@ -23,7 +23,7 @@ function blocks {
 
 sgdisk --new=1:1M:+127M --new=2:129M:+127M \
     --new=3:256M:+128M --new=4:384M:+128M \
-    --new=5:512M:+128M --new=6:768M:+128M \
+    --new=5:512M:+260M --new=6:772M:+124M \
     -p /dev/ubda
 udevadm settle
 #ls -Artlh /dev/block
@@ -61,11 +61,16 @@ blocks resize /dev/mapper/VG-ubda1 96M
 vgchange -an
 
 mkfs.xfs /dev/ubda6
-blocks resize --resize-device /dev/ubda6 252M
+blocks resize --resize-device /dev/ubda6 250M
 mkfs.ext4 /dev/ubda6
 blocks resize --resize-device /dev/ubda6 128M
 
-mkfs.ext4 /dev/ubda5
+# Btrfs sb identification fails, but _BHRfS_M does appear
+# in the strace, what drugs is blkid on?
+# blkid won't recognise a btrfs filesystem smaller than 256m
+# (also btrfs can't shrink a 256m fs, though it can create a smaller one)
+mkfs.btrfs /dev/ubda5
+#strace -s1024 -f blkid -p -c /dev/null /dev/ubda5
 blocks to-lvm /dev/ubda5 --join=VG
 ! blocks to-lvm /dev/ubda5
 
@@ -77,9 +82,6 @@ blocks to-bcache /dev/ubda2
 # Can't shrink an unrecognised partition
 ! blocks to-bcache /dev/ubda4
 #mkfs.btrfs /dev/ubda3
-# Btrfs sb identification fails, but _BHRfS_M does appear
-# in the strace, what drugs is blkid on?
-#strace -s1024 -f blkid -p -c /dev/null /dev/ubda3
 # ReiserFS has too much interactivity
 #mkfs.reiserfs -q /dev/ubda3
 mkfs.nilfs2 -B 1024 /dev/ubda3
