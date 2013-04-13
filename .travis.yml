@@ -1,0 +1,35 @@
+language: python
+install:
+- lsb_release -a
+- sudo apt-get install
+    python3-minimal libparted-dev libaugeas0
+    pkg-config gcc cryptsetup lvm2 liblzo2-dev
+    nilfs-tools reiserfsprogs xfsprogs e2fsprogs btrfs-tools gdisk
+- sudo apt-get build-dep btrfs-tools
+- which python3
+- wget
+    https://raw.github.com/pypa/pip/master/contrib/get-pip.py
+    http://python-distribute.org/distribute_setup.py
+    https://mirrors.kernel.org/ubuntu//pool/main/a/augeas/libaugeas0_1.0.0-0ubuntu1_amd64.deb
+- sudo dpkg -i libaugeas0*deb
+- python3.3 distribute_setup.py --user
+- export PATH=$PATH:$HOME/.local/bin
+- easy_install-3.3 --user pip
+- export PIP_USE_MIRRORS=true PIP_DOWNLOAD_CACHE=~/.cache
+- pip-3.3 install --user
+    -e. -e git+https://github.com/g2p/python-augeas.git@v0.4.2a1#egg=python-augeas
+    https://github.com/g2p/pyparted/archive/pyparted-3.10a1.tar.gz#egg=pyparted
+    coverage
+- git clone https://github.com/g2p/enter-uml.git
+- git clone https://github.com/g2p/bcache-tools.git
+- make -C bcache-tools
+- sudo make -C bcache-tools install
+- git clone https://git.kernel.org/pub/scm/linux/kernel/git/mason/btrfs-progs.git
+- make -C btrfs-progs version.h btrfs-show-super
+- export PATH=$PATH:$PWD/enter-uml:$PWD/btrfs-progs
+- sudo mkdir -vp /etc/lvm/backup /etc/lvm/archive
+- sudo ln -Tsf /proc/mounts /etc/mtab
+
+script:
+- make -C tests
+

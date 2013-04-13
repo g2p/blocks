@@ -1,8 +1,10 @@
 #!/bin/bash
 set -ex
 
-mount -t tmpfs tmpfs /etc/lvm/archive
-mount -t tmpfs tmpfs /etc/lvm/backup
+# Precise compat
+mkdir -vp /run/lock /var/lock
+if test -e /etc/lvm/archive; then mount -t tmpfs tmpfs /etc/lvm/archive; fi
+if test -e /etc/lvm/backup; then mount -t tmpfs tmpfs /etc/lvm/backup; fi
 
 # Start udev before running sgdisk, because it doesn't
 # run any rules for preexisting devices (not expected behavior)
@@ -111,8 +113,8 @@ blocks --debug to-bcache /dev/mapper/VG-ubda1
 vgcfgbackup --file after.twice VG
 
 # Those must be identical except for seqno and various timestamps
-git --no-pager diff --no-index --patience before before.restored ||:
-git --no-pager diff --no-index --patience after after.twice ||:
+git --no-pager diff --no-index --color --patience before before.restored ||:
+git --no-pager diff --no-index --color --patience after after.twice ||:
 
 coverage-3.3 report -m
 coverage-3.3 annotate

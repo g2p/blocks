@@ -47,8 +47,8 @@ On Debian/Ubuntu (raring is recommended):
 
     sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0 \
         pkg-config libpython3.3-dev gcc
-    sudo aptitude install cryptsetup lvm2 \
-        nilfs-tools reiserfsprogs xfsprogs e2fsprogs  # optional
+    sudo aptitude install cryptsetup lvm2 liblzo2-dev \
+        nilfs-tools reiserfsprogs xfsprogs e2fsprogs btrfs-tools  # optional
     type pip-3.3 || alias pip-3.3='python3.3 -m pip.runner'
 
 Command-line tools for LVM2, LUKS, bcache (see above), filesystem
