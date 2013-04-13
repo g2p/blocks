@@ -3,6 +3,9 @@
 /*.egg-info/
 /build/
 /dist/
-/test.disk
-/.coverage
+/tests/before*
+/tests/after*
+/tests/keyfile
+/tests/test.disk
+/tests/.coverage
 *.py,cover
