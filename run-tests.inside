@@ -61,7 +61,10 @@ blocks resize /dev/mapper/VG-ubda1 96M
 vgchange -an
 
 mkfs.xfs /dev/ubda6
-blocks resize --resize-device /dev/ubda6 250M
+blocks resize --resize-device /dev/ubda6 128M
+! blocks resize --resize-device /dev/ubda6 120M
+mkfs.reiserfs -q /dev/ubda6
+blocks resize --resize-device /dev/ubda6 132M
 mkfs.ext4 /dev/ubda6
 blocks resize --resize-device /dev/ubda6 128M
 
