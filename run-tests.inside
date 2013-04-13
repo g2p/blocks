@@ -22,7 +22,9 @@ function blocks {
 ! blocks
 
 sgdisk --new=1:1M:+127M --new=2:129M:+127M \
-    --new=3:256M:+128M --new=4:384M:+128M --new=5:512M:+128M -p /dev/ubda
+    --new=3:256M:+128M --new=4:384M:+128M \
+    --new=5:512M:+128M --new=6:768M:+128M \
+    -p /dev/ubda
 udevadm settle
 #ls -Artlh /dev/block
 
@@ -32,6 +34,19 @@ udevadm control --exit
 mkfs.ext4 /dev/ubda1
 blocks to-lvm /dev/ubda1 --vg-name=VG
 ! blocks to-lvm /dev/ubda1
+
+vgchange -ay
+blocks resize --resize-device /dev/mapper/VG-ubda1 64M
+# will round up
+blocks resize --resize-device /dev/mapper/VG-ubda1 95M
+blocks resize /dev/mapper/VG-ubda1 64M
+blocks resize /dev/mapper/VG-ubda1 96M
+vgchange -an
+
+mkfs.xfs /dev/ubda6
+blocks resize --resize-device /dev/ubda6 252M
+mkfs.ext4 /dev/ubda6
+blocks resize --resize-device /dev/ubda6 128M
 
 mkfs.ext4 /dev/ubda5
 blocks to-lvm /dev/ubda5 --join=VG

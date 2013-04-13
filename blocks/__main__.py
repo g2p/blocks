@@ -40,6 +40,18 @@ def bytes_to_sector(by):
     return sectors
 
 
+def intdiv_up(num, denom):
+    return (num - 1) // denom + 1
+
+
+def align_up(size, align):
+    return intdiv_up(size, align) * align
+
+
+def align(size, align):
+    return (size // align) * align
+
+
 class UnsupportedSuperblock(Exception):
     def __init__(self, device):
         self.device = device
@@ -150,6 +162,9 @@ class BlockDevice:
         assert rv % 512 == 0
         return rv
 
+    def reset_size(self):
+        type(self).size._reset(self)
+
     @property
     def sysfspath(self):
         # pyudev would also work
@@ -161,6 +176,10 @@ class BlockDevice:
     def iter_holders(self):
         for hld in os.listdir(self.sysfspath + '/holders'):
             yield BlockDevice('/dev/' + hld)
+
+    @memoized_property
+    def is_dm(self):
+        return os.path.exists(self.sysfspath + '/dm')
 
     def dm_table(self):
         return subprocess.check_output(
@@ -185,25 +204,43 @@ class BlockDevice:
             os.path.exists(self.sysfspath + '/partition') and
             bool(int(open(self.sysfspath + '/partition').read())))
 
-    @memoized_property
-    def is_dm(self):
-        return os.path.exists(self.sysfspath + '/dm')
+    def ptable_context(self):
+        # the outer ptable and our offset within that
+        import parted.disk
 
-    @memoized_property
-    def part_start(self):
-        return int(open(self.sysfspath + '/start').read()) * 512
-
-    @memoized_property
-    def ptable_sysfspath(self):
-        return self.sysfspath + '/..'
-
-    @memoized_property
-    def ptable_devpath(self):
         assert self.is_partition
 
-        with open(self.ptable_sysfspath + '/dev') as fi:
-            devnum = fi.read().rstrip()
-        return os.path.realpath('/dev/block/' + devnum)
+        with open(self.sysfspath + '/../dev') as fi:
+            ptable_devnum = fi.read().rstrip()
+
+        ptable_device = PartitionedDevice(
+            os.path.realpath('/dev/block/' + ptable_devnum))
+
+        part_start = int(open(self.sysfspath + '/start').read()) * 512
+        ptable = PartitionTable(
+            device=ptable_device,
+            parted_disk=parted.disk.Disk(ptable_device.parted_device))
+        return ptable, part_start
+
+    def dev_resize(self, newsize, shrink):
+        newsize = align_up(newsize, 512)
+        # Be explicit about the intended direction;
+        # shrink is more dangerous
+        if self.is_partition:
+            ptable, part_start = self.ptable_context()
+            ptable.part_resize(part_start, newsize, shrink)
+        elif self.is_dm:
+            if shrink:
+                cmd = ['lvm', 'lvreduce', '-f']
+            else:
+                # Alloc policy / dest PVs might be useful here,
+                # but difficult to expose cleanly.
+                # Just don't use --resize-device and do it manually.
+                cmd = ['lvm', 'lvextend']
+            quiet_call(cmd + ['--size=%db' % newsize, '--', self.devpath])
+        else:
+            raise NotImplementedError('Only partitions and LVs can be resized')
+        self.reset_size()
 
 
 class PartitionedDevice(BlockDevice):
@@ -222,15 +259,6 @@ class PartitionTable(BlockData):
     def __init__(self, device, parted_disk):
         super(PartitionTable, self).__init__(device=device)
         self.parted_disk = parted_disk
-
-    @classmethod
-    def from_partition_device(cls, partition_device):
-        # the ptable that contains a partition
-        import parted.disk
-        ptable_device = PartitionedDevice(partition_device.ptable_devpath)
-        return cls(
-            device=ptable_device,
-            parted_disk=parted.disk.Disk(ptable_device.parted_device))
 
     @classmethod
     def mkgpt(cls, device):
@@ -262,7 +290,7 @@ class PartitionTable(BlockData):
         start_sector = start // 512
 
         # round up
-        end_sector = (end - 1) // 512 + 1
+        end_sector = intdiv_up(end, 512)
 
         part = None
         for part in self._iter_range(start_sector, end_sector):
@@ -288,7 +316,7 @@ class PartitionTable(BlockData):
         block_stack = get_block_stack(BlockDevice(part.path), progress)
 
         block_stack.read_superblocks()
-        block_stack.reserve_end_area_verbose(part_newsize, progress)
+        block_stack.stack_reserve_end_area(part_newsize, progress)
 
     def reserve_space_before(self, part_start, length, progress):
         assert part_start >= length, (part_start, length)
@@ -301,6 +329,33 @@ class PartitionTable(BlockData):
             raise KeyError(part_start, self)
 
         return self._reserve_range(part_start - length, part_start, progress)
+
+    def part_resize(self, part_start, newsize, shrink):
+        import parted.geometry
+        import parted.constraint
+
+        start_sector = bytes_to_sector(part_start)
+        part = self.parted_disk.getPartitionBySector(start_sector)
+        # Parted uses inclusive ends, so substract one
+        new_end = part.geometry.start + bytes_to_sector(newsize) - 1
+        if shrink:
+            assert new_end < part.geometry.end
+        else:
+            assert new_end > part.geometry.end
+        geom = parted.geometry.Geometry(
+            device=self.device.parted_device,
+            start=part.geometry.start,
+            end=new_end)
+        # We want an aligned region at least as large as newsize
+        # TODO: add a CLI arg for simply getting the max region
+        # The user could get the max region wrong if aligning
+        # makes it slightly smaller for example
+        optim = self.device.parted_device.optimalAlignedConstraint
+        solve_max = parted.constraint.Constraint(minGeom=geom)
+        cons = optim.intersect(solve_max)
+        assert self.parted_disk.setPartitionGeometry(
+            part, cons, geom.start, geom.end) is True
+        self.parted_disk.commit()
 
     def shift_left(self, part_start, part_start1):
         assert part_start1 < part_start
@@ -337,15 +392,13 @@ class PartitionTable(BlockData):
 
 class Filesystem(BlockData):
     resize_needs_mpoint = False
+    sb_size_in_bytes = False
 
     def reserve_end_area_nonrec(self, pos):
-        return self.reserve_end_area(pos)
-
-    def reserve_end_area(self, pos):
         # XXX Non-reentrant (self.mpoint)
 
         # align to a block boundary that doesn't encroach
-        pos = (pos // self.block_size) * self.block_size
+        pos = align(pos, self.block_size)
 
         if self.fssize <= pos:
             return
@@ -353,6 +406,10 @@ class Filesystem(BlockData):
         if not self.can_shrink:
             raise CantShrink(self)
 
+        self._mount_and_resize(pos)
+        return pos
+
+    def _mount_and_resize(self, pos):
         with contextlib.ExitStack() as st:
             if self.resize_needs_mpoint:
                 self.mpoint = st.enter_context(
@@ -371,9 +428,21 @@ class Filesystem(BlockData):
         self.read_superblock()
         assert self.fssize == pos
 
+    def grow_nonrec(self, upper_bound):
+        newsize = align(upper_bound, self.block_size)
+        assert self.fssize <= newsize
+        if self.fssize == newsize:
+            return
+        self._mount_and_resize(newsize)
+        return newsize
+
     @property
     def fssize(self):
-        return self.block_size * self.block_count
+        if self.sb_size_in_bytes:
+            assert self.size_bytes % self.block_size == 0
+            return self.size_bytes
+        else:
+            return self.block_size * self.block_count
 
     @memoized_property
     def fslabel(self):
@@ -475,11 +544,13 @@ class LUKS(SimpleContainer):
         subprocess.check_call(
             ['cryptsetup', 'resize', '--size=%d' % sectors,
              '--', self.cleartext_device.devpath])
+        return pos
 
 
 class XFS(Filesystem):
     can_shrink = False
     resize_needs_mpoint = True
+    vfstype = 'xfs'
 
     def read_superblock(self):
         self.block_size = None
@@ -498,9 +569,17 @@ class XFS(Filesystem):
         proc.wait()
         assert proc.returncode == 0
 
+    def _resize(self, target_size):
+        assert target_size % self.block_size == 0
+        target_blocks = target_size // self.block_size
+        quiet_call(
+            ['xfs_growfs', '-D', '%d' % target_blocks,
+             '--', self.device.devpath])
+
 
 class NilFS(Filesystem):
     can_shrink = True
+    sb_size_in_bytes = True
     resize_needs_mpoint = True
     vfstype = 'nilfs2'
 
@@ -522,11 +601,6 @@ class NilFS(Filesystem):
         proc.wait()
         assert proc.returncode == 0
 
-    @property
-    def fssize(self):
-        assert self.size_bytes % self.block_size == 0
-        return self.size_bytes
-
     def _resize(self, target_size):
         assert target_size % self.block_size == 0
         quiet_call(
@@ -536,6 +610,7 @@ class NilFS(Filesystem):
 
 class BtrFS(Filesystem):
     can_shrink = True
+    sb_size_in_bytes = True
     resize_needs_mpoint = True
     vfstype = 'btrfs'
 
@@ -560,11 +635,6 @@ class BtrFS(Filesystem):
                 self.size_bytes = int(line.split(maxsplit=1)[1])
         proc.wait()
         assert proc.returncode == 0
-
-    @property
-    def fssize(self):
-        assert self.size_bytes % self.block_size == 0
-        return self.size_bytes
 
     def _resize(self, target_size):
         assert target_size % self.block_size == 0
@@ -693,14 +763,25 @@ class BlockStack:
             pos -= block_data.offset
         yield pos, self.topmost
 
-    def reserve_end_area(self, pos):
-        # resizes
-        for inner_pos, block_data in reversed(list(self.iter_pos(pos))):
-            block_data.reserve_end_area_nonrec(inner_pos)
+    # Don't memoize this one (fssize changes)
+    @property
+    def total_data_size(self):
+        return self.topmost.fssize + self.overhead
 
-    def reserve_end_area_verbose(self, pos, progress):
-        bs = self.topmost.block_size
-        inner_pos = ((pos - self.overhead) // bs) * bs
+    def stack_resize(self, pos, *, shrink, progress):
+        if shrink:
+            self.stack_reserve_end_area(pos, progress)
+        else:
+            self.stack_grow(pos, progress)
+
+    def stack_grow(self, newsize, progress):
+        for block_data in self.wrappers:
+            newsize = block_data.grow_nonrec(newsize)
+            newsize -= block_data.offset
+        self.topmost.grow_nonrec(newsize)
+
+    def stack_reserve_end_area(self, pos, progress):
+        inner_pos = align(pos - self.overhead, self.topmost.block_size)
         shrink_size = self.topmost.fssize - inner_pos
         fstype = self.topmost.device.superblock_type
 
@@ -722,7 +803,8 @@ class BlockStack:
 
         # While there may be no need to shrink the topmost fs,
         # the wrapper stack needs to be updated for the new size
-        self.reserve_end_area(pos)
+        for inner_pos, block_data in reversed(list(self.iter_pos(pos))):
+            block_data.reserve_end_area_nonrec(inner_pos)
 
     def read_superblocks(self):
         for wrapper in self.wrappers:
@@ -1110,7 +1192,7 @@ def lv_to_bcache(device, debug, progress, join):
 
     block_stack = get_block_stack(device, progress)
     block_stack.read_superblocks()
-    block_stack.reserve_end_area_verbose(data_size, progress)
+    block_stack.stack_reserve_end_area(data_size, progress)
     block_stack.deactivate()
     del block_stack
 
@@ -1135,8 +1217,7 @@ def part_to_bcache(device, debug, progress, join):
     bsb_size = 1024**2
     data_size = device.size
 
-    ptable = PartitionTable.from_partition_device(device)
-    part_start = device.part_start
+    ptable, part_start = device.ptable_context()
     ptable.reserve_space_before(part_start, bsb_size, progress)
     part_start1 = part_start - bsb_size
 
@@ -1147,6 +1228,7 @@ def part_to_bcache(device, debug, progress, join):
         write_offset = part_start1 - (512 * write_part.geometry.start)
         dev_fd = os.open(write_part.path, os.O_SYNC|os.O_RDWR|os.O_EXCL)
     elif write_part.type == _ped.PARTITION_FREESPACE:
+        # XXX Can't open excl if one of the partitions is used by dm, apparently
         dev_fd = ptable.device.open_excl()
         write_offset = part_start1
     else:
@@ -1175,6 +1257,24 @@ def part_to_bcache(device, debug, progress, join):
         end='', flush=True)
     ptable.shift_left(part_start, part_start1)
     print('ok')
+    device.reset_size()
+
+
+SIZE_RE = re.compile(r'^(\d+)([bkmgtpe])?$')
+
+
+def parse_size_arg(size):
+    match = SIZE_RE.match(size.lower())
+    if not match:
+        raise argparse.ArgumentTypeError(
+            'Size must be a decimal integer '
+            'and a one-character unit suffix (bkmgtpe)')
+    val = int(match.group(1))
+    unit = match.group(2)
+    if unit is None:
+        unit = 'b'
+    # reserving uppercase in case decimal units are needed
+    return val * 1024**'bkmgtpe'.find(unit)
 
 
 def main():
@@ -1207,6 +1307,18 @@ def main():
     sp_rotate.add_argument('device')
     sp_rotate.set_defaults(action=cmd_rotate)
 
+    sp_resize = commands.add_parser('resize')
+    sp_resize.add_argument('device')
+    sp_resize.add_argument(
+        '--resize-device', action='store_true',
+        help='Resize the device, not just the contents.'
+        ' The device must be a partition or a logical volume.')
+    sp_resize.add_argument(
+        'newsize', type=parse_size_arg,
+        help='new size in byte units;'
+        ' bkmgtpe suffixes are accepted, in powers of 1024 units')
+    sp_resize.set_defaults(action=cmd_resize)
+
     # Give help when no subcommand is given
     if not sys.argv[1:]:
         parser.print_help()
@@ -1214,6 +1326,38 @@ def main():
 
     args = parser.parse_args()
     return args.action(args)
+
+
+def cmd_resize(args):
+    device = BlockDevice(args.device)
+    newsize = args.newsize
+    resize_device = args.resize_device
+    debug = args.debug
+    progress = CLIProgressHandler()
+
+    block_stack = get_block_stack(device, progress)
+
+    device_delta = newsize - device.size
+
+    if device_delta > 0 and resize_device:
+        device.dev_resize(newsize, shrink=False)
+        # May have been rounded up for the sake of partition alignment
+        # LVM rounds up as well (and its LV metadata uses PE units)
+        newsize = device.size
+
+    block_stack.read_superblocks()
+    assert block_stack.total_data_size <= device.size
+    data_delta = newsize - block_stack.total_data_size
+    block_stack.stack_resize(newsize, shrink=data_delta < 0, progress=progress)
+
+    if device_delta < 0 and resize_device:
+        tds = block_stack.total_data_size
+        # LVM should be able to reload in-use devices,
+        # but the kernel's partition handling can't.
+        if device.is_partition:
+            block_stack.deactivate()
+            del block_stack
+        device.dev_resize(tds, shrink=True)
 
 
 def cmd_rotate(args):
@@ -1312,7 +1456,7 @@ def cmd_to_lvm(args):
             .format(pe_size, pe_newpos, device.size))
 
     block_stack.read_superblocks()
-    block_stack.reserve_end_area_verbose(pe_newpos, progress)
+    block_stack.stack_reserve_end_area(pe_newpos, progress)
 
     fsuuid = block_stack.topmost.fsuuid
     block_stack.deactivate()
