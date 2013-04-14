@@ -357,13 +357,14 @@ class Filesystem(BlockData):
             if self.resize_needs_mpoint:
                 self.mpoint = st.enter_context(
                     tempfile.TemporaryDirectory(suffix='.privmnt'))
+                # Don't pass -n, Nilfs relies on /etc/mtab to find its mountpoint
                 # TODO: use unshare() here
                 quiet_call(
                     ['mount', '-t', self.vfstype, '-o', 'noatime,noexec,nodev',
-                     '-n', '--', self.device.devpath, self.mpoint])
+                     '--', self.device.devpath, self.mpoint])
                 st.callback(
                     lambda: quiet_call(
-                        'umount -n -- '.split() + [self.mpoint]))
+                        'umount -- '.split() + [self.mpoint]))
             self._resize(pos)
 
         # measure size again
