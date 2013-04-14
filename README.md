@@ -98,3 +98,7 @@ its volume path in the kernel command-line.  `root=UUID=<UUID>` works,
 and `root=/dev/bcache0` will also work if you have a single bcache
 volume.
 
+# Build status
+
+[![Build Status](https://travis-ci.org/g2p/blocks.png)](https://travis-ci.org/g2p/blocks)
+
