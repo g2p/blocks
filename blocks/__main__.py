@@ -1278,6 +1278,14 @@ def parse_size_arg(size):
 
 
 def main():
+    try:
+        assert False
+    except AssertionError:
+        pass
+    else:
+        print('Assertions need to be enabled', file=sys.stderr)
+        return 2
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')
     commands = parser.add_subparsers(dest='command', metavar='command')
