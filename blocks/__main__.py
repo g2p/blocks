@@ -495,8 +495,13 @@ class LUKS(SimpleContainer):
             ['cryptsetup', 'luksOpen', '--', self.device.devpath, dmname])
 
     def deactivate(self):
-        subprocess.check_call(
-            ['cryptsetup', 'remove', '--', self.cleartext_device.devpath])
+        while True:
+            dev = self.snoop_activated()
+            if dev is None:
+                break
+            subprocess.check_call(
+                ['cryptsetup', 'remove', '--', dev.devpath])
+        type(self).cleartext_device._reset(self)
 
     def snoop_activated(self):
         for hld in self.device.iter_holders():
