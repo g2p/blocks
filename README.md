@@ -45,7 +45,7 @@ Python 3.3, pip and Git are required before installing.
 You will also need libparted (2.3 or newer, library and headers) and
 libaugeas (library only, 1.0 or newer).
 
-On Debian/Ubuntu (raring is recommended):
+On Debian/Ubuntu (Ubuntu raring is recommended):
 
     sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0 \
         pkg-config libpython3.3-dev gcc
@@ -68,37 +68,49 @@ or you can install from source:
     pip-3.3 install --user -r <(wget -O- https://raw.github.com/g2p/blocks/master/requirements.txt)
     cp -lt ~/bin ~/.local/bin/blocks
 
-# Usage (LVM conversion)
+# Usage
+
+## Converting your root filesystem to LVM
+
+Install LVM.
+
+Edit your /etc/fstab to refer to filesystems by UUID, and regenerate
+your initramfs so that it picks up the new tools.
+
+With grub2, you don't need to switch to a separate boot
+partition, but make sure grub2 installs lvm.mod inside your /boot.
+
+Make sure your backups are up to date, boot to live media ([Ubuntu raring
+liveusb](http://cdimage.ubuntu.com/daily-live/current/) is a good
+choice), install blocks, and convert.
+
+## Converting your root filesystem to bcache
+
+Install bcache-tools, build and install the bcache kernel from the above
+links.
+
+Edit your /etc/fstab to refer to filesystems by UUID, and regenerate
+your initramfs so that it picks up the new tools.  Those tools currently
+assume you use update-initramfs, but since they are udev-based they
+may easily be ported to other distributions.
+
+Edit your grub.cfg to refer to filesystems by UUID on the kernel
+command-line (this is often the case, except when you are already using
+LVM, in which case update-grub tends to write a logical path).  Make
+sure you have a separate /boot partition.
+
+Make sure your backups are up to date, boot to live media ([Ubuntu raring
+liveusb](http://cdimage.ubuntu.com/daily-live/current/) is a good
+choice), install blocks, and convert.
+
+## Getting started
 
     blocks --help
-    blocks to-lvm --help
-    sudo blocks to-lvm /dev/sdaN
+    blocks <subcommand> --help
 
 If `blocks` isn't in the shell's command path, replace with:
 
     sudo python3.3 -m blocks
-
-Don't forget to update `/etc/fstab` (no change is needed if filesystems
-are mounted by uuid). If necessary, rebuild the grub config (grub2 needs
-to install some modules if /boot is within a logical volume) and your
-initramfs.
-
-# Usage (bcache conversion)
-
-    blocks --help
-    blocks to-bcache --help
-    sudo blocks to-bcache /dev/sdaN
-    # Or
-    sudo blocks to-bcache /dev/VG/LV
-
-When converting to bcache, keep in mind you need the development kernel
-given above.  If you convert your root filesystem, you need to
-re-run update-initramfs after installing bcache-tools from the above
-link.  Finally, when converting your root filesystem from a logical
-volume, make sure grub.cfg doesn't reference the root filesystem using
-its volume path in the kernel command-line.  `root=UUID=<UUID>` works,
-and `root=/dev/bcache0` will also work if you have a single bcache
-volume.
 
 # Build status
 
