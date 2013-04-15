@@ -1577,7 +1577,7 @@ def cmd_to_lvm(args):
     # Recovery: copy back the PE we had moved to the end of the device.
     print(
         'If the next stage is interrupted, it can be reverted with:\n'
-        '    dd if={devpath} of={devpath} bs={pe_size} count=1 skip={pe_count}'
+        '    dd if={devpath} of={devpath} bs={pe_size} count=1 skip={pe_count} conv=notrunc'
         .format(
             devpath=device.devpath, pe_size=pe_size, pe_count=pe_count))
 
