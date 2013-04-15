@@ -505,7 +505,10 @@ class LUKS(SimpleContainer):
             match = dm_crypt_re.match(hld.dm_table())
             # Having the correct offset ensures we're not getting
             # the size of a smaller filesystem inside the partition
-            if match and int(match.group('offset')) == self.offset:
+            if (
+                match and
+                int(match.group('offset')) == bytes_to_sector(self.offset)
+           ):
                 return hld
 
     @memoized_property
@@ -530,7 +533,7 @@ class LUKS(SimpleContainer):
         for line in proc.stdout:
             if line.startswith(b'Payload offset:'):
                 line = line.decode('ascii')
-                self.offset = int(line.split(':', 1)[1])
+                self.offset = int(line.split(':', 1)[1]) * 512
         proc.wait()
         assert proc.returncode == 0
         self._superblock_read = True
