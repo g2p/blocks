@@ -1299,7 +1299,7 @@ def main():
     commands = parser.add_subparsers(dest='command', metavar='command')
 
     sp_to_lvm = commands.add_parser(
-        'to-lvm',
+        'to-lvm', aliases=['lvmify'],
         help='Convert to LVM')
     sp_to_lvm.add_argument('device')
     vg_flags = sp_to_lvm.add_mutually_exclusive_group()
@@ -1309,7 +1309,7 @@ def main():
 
     sp_to_bcache = commands.add_parser(
         'to-bcache',
-        help='Convert a block device to use bcache')
+        help='Convert to bcache')
     sp_to_bcache.add_argument('device')
     sp_to_bcache.add_argument('--join', metavar='CSET-UUID')
     sp_to_bcache.set_defaults(action=cmd_to_bcache)

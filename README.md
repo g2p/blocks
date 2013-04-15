@@ -7,9 +7,9 @@ witout moving data.  `blocks` shuffles blocks and sprouts superblocks.
 
 ## LVM conversion
 
-`blocks to-lvm` takes a block device (partition or whole disk)
-containing a filesystem, shrinks the filesystem by a small amount, and
-converts it to LVM in place.
+`blocks to-lvm` (alias: `lvmify`) takes a block device (partition or
+whole disk) containing a filesystem, shrinks the filesystem by a small
+amount, and converts it to LVM in place.
 
 The block device is converted to a physical volume and the filesystem is
 converted to a logical volume.  If `--join=<VG>` is used the volumes
