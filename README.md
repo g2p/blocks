@@ -22,19 +22,21 @@ converting it to various RAID levels with `lvconvert --type=raidN
 
 ## bcache conversion
 
-**The extended bcache format we need is changing while being merged upstream.
-Please wait a few days before making bcache conversions.**
-
 `blocks to-bcache` converts a block device (partition or logical
 volume) to use bcache.  If `--join=<cset>` is used the device joins an
 existing cache set.
 
-A development version of the bcache cli utilities is required.  At
-runtime (but not during conversion), you need a kernel that reads a
-slightly updated bcache format:
+A development version of the bcache cli utilities is required.
+Conversion makes no demands on the kernel, but at runtime, you need
+an up-to-date kernel that reads the latest bcache format.  Kent
+Overstreet's repository has it starting with the bcache branch.
+My own branch currently adds resizing support on top of that.
 
-* <https://github.com/g2p/bcache-tools>
-* <https://github.com/g2p/linux/tree/bcache-for-upstream>
+* <https://github.com/g2p/bcache-tools> (required)
+* <https://github.com/g2p/linux/tree/bcache> (option 1, a few extra
+  features)
+* <http://atlas.evilpiepirate.org/git/linux-bcache.git/> (option 2,
+  upstream)
 
 # Requirements
 
