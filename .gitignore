@@ -6,6 +6,7 @@
 /tests/before*
 /tests/after*
 /tests/keyfile
+/tests/whispers
 /tests/test.disk
 /tests/.coverage
 *.py,cover

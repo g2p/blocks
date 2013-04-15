@@ -22,9 +22,9 @@ converting it to various RAID levels with `lvconvert --type=raidN
 
 ## bcache conversion
 
-`blocks to-bcache` converts a block device (partition or logical
-volume) to use bcache.  If `--join=<cset>` is used the device joins an
-existing cache set.
+`blocks to-bcache` converts a block device (partition, logical volume,
+LUKS device) to use bcache.  If `--join=<cset>` is used the device joins
+an existing cache set.
 
 A development version of the bcache cli utilities is required.
 Conversion makes no demands on the kernel, but at runtime, you need

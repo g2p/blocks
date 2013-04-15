@@ -564,6 +564,58 @@ class LUKS(SimpleContainer):
         assert proc.returncode == 0
         self._superblock_read = True
 
+    def read_superblock_ll(self, fd):
+        # Low-level
+        # https://cryptsetup.googlecode.com/git/docs/on-disk-format.pdf
+
+        magic, version = struct.unpack('>6sH', os.pread(fd, 8, 0))
+        assert magic == b'LUKS\xBA\xBE', magic
+        assert version == 1
+
+        payload_start_sectors, key_bytes = struct.unpack(
+            '>2I', os.pread(fd, 8, 104))
+        sb_end = 592
+
+        for key_slot in range(8):
+            key_offset, key_stripes = struct.unpack(
+                '>2I', os.pread(fd, 8, 208 + 48 * key_slot + 40))
+            assert key_stripes == 4000
+            key_size = key_stripes * key_bytes
+            key_end = key_offset * 512 + key_size
+            if key_end > sb_end:
+                sb_end = key_end
+
+        ll_offset = payload_start_sectors * 512
+        assert ll_offset == self.offset, (ll_offset, self.offset)
+        assert ll_offset >= sb_end
+        self.sb_end = sb_end
+
+    def shift_sb(self, fd, shift_by):
+        assert shift_by > 0
+        assert shift_by % 512 == 0
+        assert self.offset % 512 == 0
+        assert self.sb_end + shift_by <= self.offset
+
+        # Read the superblock
+        sb = os.pread(fd, self.sb_end, 0)
+        assert len(sb) == self.sb_end
+
+        # Edit the sb
+        offset_sectors, = struct.unpack_from('>I', sb, 104)
+        assert offset_sectors * 512 == self.offset
+        sb = bytearray(sb)
+        struct.pack_into(
+            '>I', sb, 104, offset_sectors - shift_by // 512)
+        sb = bytes(sb)
+
+        # Wipe the magic and write the shifted, edited superblock
+        wr_len = os.pwrite(fd, b'\0' * shift_by + sb, 0)
+        assert wr_len == shift_by + self.sb_end
+
+        # Wipe the results of read_superblock_ll
+        # Keep self.offset for now
+        del self.sb_end
+
     def reserve_end_area_nonrec(self, pos):
         # cryptsetup uses the inner size
         inner_size = pos - self.offset
@@ -1245,6 +1297,30 @@ def lv_to_bcache(device, debug, progress, join):
         device=device, size=device.size, debug=debug, forward=False)
 
 
+def luks_to_bcache(device, debug, progress, join):
+    luks = LUKS(device)
+    luks.deactivate()
+    dev_fd = device.open_excl()
+    luks.read_superblock()
+    luks.read_superblock_ll(dev_fd)
+    # The smallest and most compatible bcache offset
+    shift_by = 512*16
+    assert luks.sb_end + shift_by <= luks.offset
+    data_size = device.size - shift_by
+    synth_bdev = make_bcache_sb(shift_by, data_size, join)
+
+    # XXX not atomic
+    print('Shifting and editing the LUKS superblock... ', end='', flush=True)
+    luks.shift_sb(dev_fd, shift_by=shift_by)
+    print('ok')
+
+    print('Copying the bcache superblock... ', end='', flush=True)
+    synth_bdev.copy_to_physical(dev_fd)
+    os.close(dev_fd)
+    del dev_fd
+    print('ok')
+
+
 def part_to_bcache(device, debug, progress, join):
     # Detect the alignment parted would use?
     # I don't think it can be greater than 1MiB, in which case
@@ -1437,6 +1513,8 @@ def cmd_to_bcache(args):
         return part_to_bcache(device, debug, progress, join)
     elif device.is_lv:
         return lv_to_bcache(device, debug, progress, join)
+    elif device.superblock_type == 'crypto_LUKS':
+        return luks_to_bcache(device, debug, progress, join)
     else:
         print(
             'Device {} is not a partition or a logical volume'

@@ -38,6 +38,16 @@ blocks to-lvm /dev/ubda1 --vg-name=VG
 ! blocks to-lvm /dev/ubda1
 
 dd if=/dev/urandom of=keyfile bs=64k count=1
+
+# Doing this outside of a partition, otherwise the part-to-bcache
+# strategy would be used
+truncate -s1G whispers
+loop=$(losetup -f --show -- whispers)
+cryptsetup --batch-mode luksFormat -- "$loop" keyfile
+cryptsetup luksOpen --key-file=keyfile -- "$loop" whispers
+mkfs.ext4 /dev/mapper/whispers
+blocks to-bcache -- "$loop"
+
 cryptsetup --batch-mode luksFormat /dev/ubda1 keyfile
 cryptsetup luksOpen --key-file=keyfile /dev/ubda1 whispers
 mkfs.ext4 /dev/mapper/whispers
