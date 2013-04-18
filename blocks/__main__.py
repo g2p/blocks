@@ -559,7 +559,10 @@ class LUKS(SimpleContainer):
         self._superblock_read = True
 
     def reserve_end_area_nonrec(self, pos):
-        sectors = bytes_to_sector(pos)
+        # cryptsetup uses the inner size
+        inner_size = pos - self.offset
+        sectors = bytes_to_sector(inner_size)
+
         # pycryptsetup is useless, no resize support
         # otoh, size doesn't appear in the superblock,
         # and updating the dm table is only useful if
@@ -567,6 +570,9 @@ class LUKS(SimpleContainer):
         subprocess.check_call(
             ['cryptsetup', 'resize', '--size=%d' % sectors,
              '--', self.cleartext_device.devpath])
+        if self.snoop_activated():
+            self.cleartext_device.reset_size()
+            assert self.cleartext_device.size == inner_size
         return pos
 
 
