@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import string
+import struct
 import subprocess
 import sys
 import tempfile
@@ -151,9 +152,14 @@ class BlockDevice:
     @memoized_property
     def has_bcache_superblock(self):
         # blkid doesn't detect bcache, so special-case it.
-        # Exit status is always 0, check if there is output
-        return bool(subprocess.check_output(
-            ['probe-bcache', '--', self.devpath]))
+        # To keep dependencies light, don't use bcache-tools for detection,
+        # only require the tools after a successful detection.
+        if self.size <= 8192:
+            return False
+        sbfd = os.open(self.devpath, os.O_RDONLY)
+        magic, = struct.unpack('16s', os.pread(sbfd, 16, 4096 + 24))
+        os.close(sbfd)
+        return magic == b'\xc6\x85s\xf6N\x1aE\xca\x82e\xf5\x7fH\xbam\x81'
 
     @memoized_property
     def size(self):
