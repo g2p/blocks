@@ -111,6 +111,11 @@ def mk_dm(devname, table, readonly, exit_stack):
             'dmsetup remove --noudevsync --'.split() + [devname]))
 
 
+def devpath_from_sysdir(sd):
+    with open(sd + '/dev') as fi:
+        return os.path.realpath('/dev/block/' + fi.read().rstrip())
+
+
 class BlockDevice:
     def __init__(self, devpath):
         assert os.path.exists(devpath), devpath
@@ -231,11 +236,8 @@ class BlockDevice:
 
         assert self.is_partition
 
-        with open(self.sysfspath + '/../dev') as fi:
-            ptable_devnum = fi.read().rstrip()
-
         ptable_device = PartitionedDevice(
-            os.path.realpath('/dev/block/' + ptable_devnum))
+            devpath_from_sysdir(self.sysfspath + '/..'))
 
         part_start = int(open(self.sysfspath + '/start').read()) * 512
         ptable = PartitionTable(
