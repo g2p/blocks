@@ -181,6 +181,21 @@ class BlockDevice:
     def is_dm(self):
         return os.path.exists(self.sysfspath + '/dm')
 
+    @memoized_property
+    def is_lv(self):
+        if not self.is_dm:
+            return False
+        try:
+            pe_size = int(subprocess.check_output(
+                'lvm lvs --noheadings --rows --units=b --nosuffix '
+                '-o vg_extent_size --'.split()
+                + [self.devpath], universal_newlines=True))
+        except subprocess.CalledProcessError:
+            return False
+        else:
+            return True
+
+
     def dm_table(self):
         return subprocess.check_output(
             'dmsetup table --'.split() + [self.devpath],
@@ -229,7 +244,7 @@ class BlockDevice:
         if self.is_partition:
             ptable, part_start = self.ptable_context()
             ptable.part_resize(part_start, newsize, shrink)
-        elif self.is_dm:
+        elif self.is_lv:
             if shrink:
                 cmd = ['lvm', 'lvreduce', '-f']
             else:
@@ -1408,7 +1423,7 @@ def cmd_to_bcache(args):
 
     if device.is_partition:
         return part_to_bcache(device, debug, progress, join)
-    elif device.is_dm:
+    elif device.is_lv:
         return lv_to_bcache(device, debug, progress, join)
     else:
         print(
