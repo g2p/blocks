@@ -3,6 +3,7 @@
 /*.egg-info/
 /build/
 /dist/
+/tests/linux.uml
 /tests/before*
 /tests/after*
 /tests/keyfile
