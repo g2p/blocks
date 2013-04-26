@@ -1677,8 +1677,11 @@ def cmd_to_lvm(args):
 
         # Prevent the next two commands from scanning every device (slow),
         # we already know lvm should write only to the synthetic pv.
+        # Also work in the presence of a broken udev; udev inside uml
+        # appears to be fragile.
         lvm_cfg = ('--config='
                    'devices {{ filter=["a/^{synth_re}$/", "r/.*/"] }}'
+                   'activation {{ verify_udev_operations = 1 }}'
                    .format(synth_re=re.escape(synth_pv.devpath)))
 
         quiet_call(
