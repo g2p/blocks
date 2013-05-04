@@ -423,8 +423,6 @@ class Filesystem(BlockData):
     sb_size_in_bytes = False
 
     def reserve_end_area_nonrec(self, pos):
-        # XXX Non-reentrant (self.mpoint)
-
         # align to a block boundary that doesn't encroach
         pos = align(pos, self.block_size)
 
@@ -436,6 +434,22 @@ class Filesystem(BlockData):
 
         self._mount_and_resize(pos)
         return pos
+
+    @contextlib.contextmanager
+    def temp_mount(self):
+        # Don't use TemporaryDirectory, recursive cleanup
+        # on a mountpoint would be bad
+        mpoint = tempfile.mkdtemp(suffix='.privmnt')
+        # Don't pass -n, Nilfs relies on /etc/mtab to find its mountpoint
+        # TODO: use unshare() here
+        quiet_call(
+            ['mount', '-t', self.vfstype, '-o', 'noatime,noexec,nodev',
+             '--', self.device.devpath, mpoint])
+        try:
+            yield mpoint
+        finally:
+            quiet_call('umount -- '.split() + [mpoint])
+            os.rmdir(mpoint)
 
     def is_mounted(self):
         dn = '%d:%d' % self.device.devnum
@@ -458,18 +472,10 @@ class Filesystem(BlockData):
 
 
     def _mount_and_resize(self, pos):
-        with contextlib.ExitStack() as st:
-            if self.resize_needs_mpoint:
-                self.mpoint = st.enter_context(
-                    tempfile.TemporaryDirectory(suffix='.privmnt'))
-                # Don't pass -n, Nilfs relies on /etc/mtab to find its mountpoint
-                # TODO: use unshare() here
-                quiet_call(
-                    ['mount', '-t', self.vfstype, '-o', 'noatime,noexec,nodev',
-                     '--', self.device.devpath, self.mpoint])
-                st.callback(
-                    lambda: quiet_call(
-                        'umount -- '.split() + [self.mpoint]))
+        if self.resize_needs_mpoint and not self.is_mounted():
+            with self.temp_mount():
+                self._resize(pos)
+        else:
             self._resize(pos)
 
         # measure size again
@@ -728,7 +734,8 @@ class NilFS(Filesystem):
 class BtrFS(Filesystem):
     can_shrink = True
     sb_size_in_bytes = True
-    resize_needs_mpoint = True
+    # We'll get the mpoint ourselves
+    resize_needs_mpoint = False
     vfstype = 'btrfs'
 
     def read_superblock(self):
@@ -760,9 +767,10 @@ class BtrFS(Filesystem):
         # Bug introduced in Linux 3.0, fixed in 3.9.
         # Tracked down by Eric Sandeen in
         # http://comments.gmane.org/gmane.comp.file-systems.btrfs/23987
-        quiet_call(
-            'btrfs filesystem resize'.split()
-            + ['{}:{}'.format(self.devid, target_size), self.mpoint])
+        with self.temp_mount() as mpoint:
+            quiet_call(
+                'btrfs filesystem resize'.split()
+                + ['{}:{}'.format(self.devid, target_size), mpoint])
 
 
 class ReiserFS(Filesystem):
