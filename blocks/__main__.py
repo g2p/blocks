@@ -618,6 +618,9 @@ class LUKS(SimpleContainer):
         # Keep self.offset for now
         del self.sb_end
 
+    def grow_nonrec(self, upper_bound):
+        return self.reserve_end_area_nonrec(upper_bound)
+
     def reserve_end_area_nonrec(self, pos):
         # cryptsetup uses the inner size
         inner_size = pos - self.offset
