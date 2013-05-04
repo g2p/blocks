@@ -181,8 +181,13 @@ class BlockDevice:
         # pyudev would also work
         st = os.stat(self.devpath)
         assert stat.S_ISBLK(st.st_mode)
-        return '/sys/dev/block/%d:%d' % (
-            os.major(st.st_rdev), os.minor(st.st_rdev))
+        return '/sys/dev/block/%d:%d' % self.devnum
+
+    @property
+    def devnum(self):
+        st = os.stat(self.devpath)
+        assert stat.S_ISBLK(st.st_mode)
+        return (os.major(st.st_rdev), os.minor(st.st_rdev))
 
     def iter_holders(self):
         for hld in os.listdir(self.sysfspath + '/holders'):
@@ -431,6 +436,26 @@ class Filesystem(BlockData):
 
         self._mount_and_resize(pos)
         return pos
+
+    def is_mounted(self):
+        dn = '%d:%d' % self.device.devnum
+        with open('/proc/self/mountinfo') as mounts:
+            for line in mounts:
+                items = line.split()
+                if False:
+                    idx = items.index('-')
+                    fs_type = items[idx + 1]
+                    opts1 = items[5].split(',')
+                    opts2 = items[idx + 3].split(',')
+                    readonly = 'ro' in opts1 + opts2
+                    intpath = items[3]
+                    mpoint = items[4]
+                    dev = os.path.realpath(items[idx + 2])
+                devnum = items[2]
+                if dn == devnum:
+                    return True
+        return False
+
 
     def _mount_and_resize(self, pos):
         with contextlib.ExitStack() as st:
@@ -810,7 +835,7 @@ class ExtFS(Filesystem):
         assert rem == 0
 
         # resize2fs requires that the filesystem was checked
-        if self.state != 'clean' or self.check_tm < self.mount_tm:
+        if not self.is_mounted() and (self.state != 'clean' or self.check_tm < self.mount_tm):
             print('Checking the filesystem before resizing it')
             # Can't use the -n flag, it is strictly read-only and won't
             # update check_tm in the superblock
