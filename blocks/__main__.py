@@ -26,12 +26,12 @@ ASCII_ALNUM_WHITELIST = string.ascii_letters + string.digits
 # Fairly strict, snooping an incorrect mapping would be bad
 dm_crypt_re = re.compile(
     r'^0 (?P<plainsize>\d+) crypt (?P<cipher>[a-z0-9:-]+) 0+ 0'
-    ' (?P<major>\d+):(?P<minor>\d+) (?P<offset>\d+)\n$',
+    ' (?P<major>\d+):(?P<minor>\d+) (?P<offset>\d+)(?P<options> [^\n]*)?\n\Z',
     re.ASCII)
 
 dm_kpartx_re = re.compile(
     r'^0 (?P<partsize>\d+) linear'
-    ' (?P<major>\d+):(?P<minor>\d+) (?P<offset>\d+)\n$',
+    ' (?P<major>\d+):(?P<minor>\d+) (?P<offset>\d+)\n\Z',
     re.ASCII)
 
 
@@ -1401,7 +1401,7 @@ def part_to_bcache(device, debug, progress, join):
     device.reset_size()
 
 
-SIZE_RE = re.compile(r'^(\d+)([bkmgtpe])?$')
+SIZE_RE = re.compile(r'^(\d+)([bkmgtpe])?\Z')
 
 
 def parse_size_arg(size):
