@@ -14,15 +14,15 @@ install:
 - curl --compressed https://raw.github.com/g2p/kernels/master/linux.uml -o tests/linux.uml
 - chmod +x tests/linux.uml
 - sudo dpkg -i libaugeas0*deb
-- export PATH=$PATH:$HOME/.local/bin:$PWD/enter-uml:$PWD/btrfs-progs
+- export PATH=$PATH:$HOME/.local/bin:$PWD/btrfs-progs
 - export PIP_USE_MIRRORS=true PIP_DOWNLOAD_CACHE=~/.cache
 - python3.3 distribute_setup.py --user
 - easy_install-3.3 --user pip
 - pip-3.3 install --user
-    -e. -e git+https://github.com/g2p/python-augeas.git@v0.4.2a1#egg=python-augeas
+    -e. git+https://github.com/g2p/python-augeas.git@v0.4.2a1#egg=python-augeas
     https://github.com/g2p/pyparted/archive/pyparted-3.10a1.tar.gz#egg=pyparted
+    git+https://github.com/g2p/vido.git#egg=vido
     coverage
-- git clone https://github.com/g2p/enter-uml.git
 - git clone https://github.com/g2p/bcache-tools.git
 - git clone https://git.kernel.org/pub/scm/linux/kernel/git/mason/btrfs-progs.git
 - make -C btrfs-progs version.h btrfs-show-super

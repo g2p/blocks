@@ -5,6 +5,6 @@ rm -f test.disk
 # sparse
 truncate -s1G test.disk
 
-enter-uml --mem=192M --kernel ./linux.uml --kopts ubd0=test.disk \
+vido --mem=192M --kernel ./linux.uml --drive test.disk \
     -- ./run-tests.inside
 
