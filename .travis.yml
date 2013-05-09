@@ -1,24 +1,21 @@
 language: python
+python:
+- '3.3'
 install:
 - lsb_release -a
 - sudo apt-get install
-    python3-minimal libparted-dev libaugeas0
+    libparted-dev libaugeas0
     pkg-config gcc cryptsetup lvm2 liblzo2-dev
     nilfs-tools reiserfsprogs xfsprogs e2fsprogs btrfs-tools gdisk
 - sudo apt-get build-dep btrfs-tools
-- which python3
 - wget
-    http://python-distribute.org/distribute_setup.py
-    https://raw.github.com/pypa/pip/master/contrib/get-pip.py
     https://mirrors.kernel.org/ubuntu/pool/main/a/augeas/libaugeas0_1.0.0-0ubuntu1_amd64.deb
 - curl --compressed https://raw.github.com/g2p/kernels/master/linux.uml -o tests/linux.uml
 - chmod +x tests/linux.uml
 - sudo dpkg -i libaugeas0*deb
-- export PATH=$PATH:$HOME/.local/bin:$PWD/btrfs-progs
+- export PATH=$PATH:$PWD/btrfs-progs
 - export PIP_USE_MIRRORS=true PIP_DOWNLOAD_CACHE=~/.cache
-- python3.3 distribute_setup.py --user
-- easy_install-3.3 --user pip
-- pip-3.3 install --user
+- python3.3 -m pip.runner install
     -e. git+https://github.com/g2p/python-augeas.git@v0.4.2a1#egg=python-augeas
     https://github.com/g2p/pyparted/archive/pyparted-3.10a1.tar.gz#egg=pyparted
     git+https://github.com/g2p/vido.git#egg=vido
