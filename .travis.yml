@@ -15,7 +15,7 @@ install:
 - chmod +x tests/linux.uml
 - sudo dpkg -i libaugeas0*deb
 - export PATH=$PATH:$HOME/.local/bin:$PWD/btrfs-progs
-- export PIP_USE_MIRRORS=true PIP_DOWNLOAD_CACHE=~/.cache
+- export PIP_USE_MIRRORS=true PIP_DOWNLOAD_CACHE=~/.cache/pip
 - python3.3 distribute_setup.py --user
 - easy_install-3.3 --user pip
 - pip-3.3 install --user
