@@ -1,0 +1,5 @@
+blocks (0.1.1-1) unstable; urgency=low
+
+  * Debianize
+
+ -- Gabriel de Perthuis <g2p.code+debian@gmail.com>  Mon, 03 Jun 2013 12:36:47 +0200

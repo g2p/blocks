@@ -1,0 +1,6 @@
+#!/usr/bin/make -f
+
+%:
+	PYBUILD_DESTDIR=debian/python3-blocks dh $@ --with python3 --buildsystem=pybuild
+
+

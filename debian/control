@@ -1,0 +1,17 @@
+Source: blocks
+Maintainer: Gabriel de Perthuis <g2p.code+debian@gmail.com>
+Section: python
+Priority: optional
+Build-Depends: python3-setuptools (>= 0.6b3), python3, debhelper (>= 7.4.3)
+Standards-Version: 3.9.4
+X-Python3-Version: 3.3
+
+Package: python3-blocks
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}
+Description: Conversion tools for block devices
+ Convert between raw partitions, logical volumes,
+ and bcache devices witout moving data.
+ .
+ See https://github.com/g2p/blocks#readme
+ for usage instructions.
