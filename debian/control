@@ -8,7 +8,7 @@ X-Python3-Version: 3.3
 
 Package: python3-blocks
 Architecture: all
-Depends: ${misc:Depends}, ${python3:Depends}
+Depends: ${misc:Depends}, ${python3:Depends}, python3-pkg-resources
 Description: Conversion tools for block devices
  Convert between raw partitions, logical volumes,
  and bcache devices witout moving data.
