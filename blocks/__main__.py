@@ -111,9 +111,15 @@ def mk_dm(devname, table, readonly, exit_stack):
             'dmsetup remove --noudevsync --'.split() + [devname]))
 
 
+def aftersep(line, sep):
+    return line.split(sep, 1)[1].rstrip('\n')
+
+
 def devpath_from_sysdir(sd):
-    with open(sd + '/dev') as fi:
-        return os.path.realpath('/dev/block/' + fi.read().rstrip())
+    with open(sd + '/uevent') as fi:
+        for line in fi:
+            if line.startswith('DEVNAME='):
+                return '/dev/' + aftersep(line, '=')
 
 
 class BlockDevice:
@@ -592,7 +598,7 @@ class LUKS(SimpleContainer):
         for line in proc.stdout:
             if line.startswith(b'Payload offset:'):
                 line = line.decode('ascii')
-                self.offset = int(line.split(':', 1)[1]) * 512
+                self.offset = int(aftersep(line, ':')) * 512
         proc.wait()
         assert proc.returncode == 0
         self._superblock_read = True
@@ -685,10 +691,10 @@ class XFS(Filesystem):
         for line in proc.stdout:
             if line.startswith(b'dblocks ='):
                 line = line.decode('ascii')
-                self.block_count = int(line.split('=', 1)[1])
+                self.block_count = int(aftersep(line, '='))
             elif line.startswith(b'blocksize ='):
                 line = line.decode('ascii')
-                self.block_size = int(line.split('=', 1)[1])
+                self.block_size = int(aftersep(line, '='))
         proc.wait()
         assert proc.returncode == 0
 
@@ -717,10 +723,10 @@ class NilFS(Filesystem):
         for line in proc.stdout:
             if line.startswith(b'Block size:'):
                 line = line.decode('ascii')
-                self.block_size = int(line.split(':', 1)[1])
+                self.block_size = int(aftersep(line, ':'))
             elif line.startswith(b'Device size:'):
                 line = line.decode('ascii')
-                self.size_bytes = int(line.split(':', 1)[1])
+                self.size_bytes = int(aftersep(line, ':'))
         proc.wait()
         assert proc.returncode == 0
 
@@ -787,10 +793,10 @@ class ReiserFS(Filesystem):
         for line in proc.stdout:
             if line.startswith(b'Blocksize:'):
                 line = line.decode('ascii')
-                self.block_size = int(line.split(':', 1)[1])
+                self.block_size = int(aftersep(line, ':'))
             elif line.startswith(b'Count of blocks on the device:'):
                 line = line.decode('ascii')
-                self.block_count = int(line.split(':', 1)[1])
+                self.block_count = int(aftersep(line, ':'))
         proc.wait()
         assert proc.returncode == 0
 
@@ -818,23 +824,23 @@ class ExtFS(Filesystem):
         for line in proc.stdout:
             if line.startswith(b'Block size:'):
                 line = line.decode('ascii')
-                self.block_size = int(line.split(':', 1)[1])
+                self.block_size = int(aftersep(line, ':'))
             elif line.startswith(b'Block count:'):
                 line = line.decode('ascii')
-                self.block_count = int(line.split(':', 1)[1])
+                self.block_count = int(aftersep(line, ':'))
             elif line.startswith(b'Filesystem state:'):
                 line = line.decode('ascii')
-                self.state = line.split(':', 1)[1].strip()
+                self.state = aftersep(line, ':').lstrip()
             elif line.startswith(b'Last mount time:'):
                 line = line.decode('ascii')
-                date = line.split(':', 1)[1].strip()
+                date = aftersep(line, ':').lstrip()
                 if date == 'n/a':
                     self.mount_tm = time.gmtime(0)
                 else:
                     self.mount_tm = time.strptime(date)
             elif line.startswith(b'Last checked:'):
                 line = line.decode('ascii')
-                self.check_tm = time.strptime(line.split(':', 1)[1].strip())
+                self.check_tm = time.strptime(aftersep(line, ':').lstrip())
         proc.wait()
         assert proc.returncode == 0
 

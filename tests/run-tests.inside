@@ -6,15 +6,6 @@ mkdir -vp /run/lock /var/lock
 if test -e /etc/lvm/archive; then mount -t tmpfs tmpfs /etc/lvm/archive; fi
 if test -e /etc/lvm/backup; then mount -t tmpfs tmpfs /etc/lvm/backup; fi
 
-# Start udev before running sgdisk, because it doesn't
-# run any rules for preexisting devices (not expected behavior)
-#UDEV_LOG=info \
-udevd & sleep .1
-#udevadm trigger --action=add --subsystem-match=block
-#udevadm trigger --action=change --subsystem-match=block
-#udevadm settle
-#ls -Artlh /dev/block
-
 coverage-3.3 erase
 # shopt -s expand_aliases also works
 function blocks {
@@ -27,11 +18,6 @@ sgdisk --new=1:1M:+127M --new=2:129M:+127M \
     --new=3:256M:+128M --new=4:384M:+128M \
     --new=5:512M:+260M --new=6:772M:+124M \
     -p /dev/ubda
-udevadm settle
-#ls -Artlh /dev/block
-
-# Somehow udev breaks lvm in the next test
-udevadm control --exit
 
 mkfs.ext4 /dev/ubda1
 blocks to-lvm /dev/ubda1 --vg-name=VG
@@ -89,8 +75,6 @@ mkfs.btrfs /dev/ubda5
 blocks to-lvm /dev/ubda5 --join=VG
 ! blocks to-lvm /dev/ubda5
 
-# Relies on /dev/block/ device names when doing ptable lookup
-# 2713e6ab0abfc47a54ccbae26be22471aef46b24, udev 165, udev_node_add
 blocks to-bcache /dev/ubda2
 ! blocks to-bcache /dev/ubda2
 
