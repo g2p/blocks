@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -13,6 +14,8 @@ import sys
 import tempfile
 import textwrap
 import time
+import types
+import urllib.parse
 import uuid
 
 import pkg_resources
@@ -153,6 +156,11 @@ class BlockDevice:
     def __init__(self, devpath):
         assert os.path.exists(devpath), devpath
         self.devpath = devpath
+
+    @classmethod
+    def by_uuid(cls, uuid):
+        return cls(devpath=subprocess.check_output(
+            ['blkid', '-U', uuid]).rstrip())
 
     def open_excl(self):
         # O_EXCL on a block device takes the device lock,
@@ -1039,8 +1047,9 @@ class SyntheticDevice(BlockDevice):
                     wrend_offset + self.writable_end_size) <= size
 
         # Write then read back
-        assert os.pwrite(
-            dev_fd, start_data, shift_by) == self.writable_hdr_size
+        written = os.pwrite(
+            dev_fd, start_data, shift_by)
+        assert written == self.writable_hdr_size, (written, self.writable_hdr_size)
         assert os.pread(dev_fd, self.writable_hdr_size, shift_by) == start_data
 
         if self.writable_end_size != 0:
@@ -1487,7 +1496,11 @@ def main():
         help='Convert to bcache')
     sp_to_bcache.add_argument('device')
     sp_to_bcache.add_argument('--join', metavar='CSET-UUID')
+    sp_to_bcache.add_argument('--maintboot', action='store_true')
     sp_to_bcache.set_defaults(action=cmd_to_bcache)
+
+    sp_maintboot_impl = commands.add_parser('maintboot-impl')
+    sp_maintboot_impl.set_defaults(action=cmd_maintboot_impl)
 
     # Undoes an lv to bcache conversion; useful to migrate from the GPT
     # format to the bcache-offset format.
@@ -1571,8 +1584,6 @@ def cmd_rotate(args):
 
 def cmd_to_bcache(args):
     device = BlockDevice(args.device)
-    debug = args.debug
-    join = args.join
     progress = CLIProgressHandler()
 
     if device.has_bcache_superblock:
@@ -1584,17 +1595,50 @@ def cmd_to_bcache(args):
     BCacheReq.require(progress)
 
     if device.is_partition:
-        return part_to_bcache(device, debug, progress, join)
+        impl = part_to_bcache
     elif device.is_lv:
-        return lv_to_bcache(device, debug, progress, join)
+        impl = lv_to_bcache
     elif device.superblock_type == 'crypto_LUKS':
-        return luks_to_bcache(device, debug, progress, join)
+        impl = luks_to_bcache
     else:
         print(
-            'Device {} is not a partition or a logical volume'
+            'Device {} is not a partition, a logical volume, or a LUKS volume'
             .format(device.devpath),
             file=sys.stderr)
         return 1
+
+    if args.maintboot:
+        fsuuid = Filesystem(device).fsuuid
+        if not fsuuid:
+            print(
+                'Device {} doesn\'t have a UUID'.format(device.devpath),
+                file=sys.stderr)
+            return 1
+        encoded = urllib.parse.quote(json.dumps(dict(
+            command='to-bcache', device=fsuuid,
+            debug=args.debug, join=args.join)))
+        subprocess.check_call(
+            ['maintboot', '--pkgs']
+            + 'python3-blocks util-linux dash mount base-files'
+            '  lvm2 cryptsetup-bin bcache-tools'
+            '  nilfs-tools reiserfsprogs xfsprogs e2fsprogs btrfs-tools'.split()
+            + ['--initscript', pkg_resources.resource_filename(
+                'blocks', 'maintboot.init')]
+            + ['--append', 'BLOCKS_ARGS=' + encoded])
+
+    else:
+        return impl(
+            device=device, debug=args.debug, progress=progress, join=args.join)
+
+
+def cmd_maintboot_impl(args):
+    kargs = json.loads(
+        urllib.parse.unquote(os.environ['BLOCKS_ARGS']),
+        object_hook=lambda args: types.SimpleNamespace(**args))
+    assert kargs.command == 'to-bcache'
+    kargs.device = BlockDevice.by_uuid(kargs.device).devpath
+    kargs.maintboot = False
+    return cmd_to_bcache(kargs)
 
 
 def cmd_to_lvm(args):

@@ -20,6 +20,7 @@ setup(
     include_package_data=True,
     # See requirements.txt for installable versions
     install_requires=[
+        'maintboot',
         'python-augeas >= 0.4.2a0',
         'pyparted > 3.10a0'],
     classifiers='''
