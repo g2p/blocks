@@ -15,7 +15,7 @@ Recommends:
  nilfs-tools,
  reiserfsprogs,
  xfsprogs,
- e2fsprogs,
+ e2fsprogs (>= 1.42),
  btrfs-tools,
  bcache-tools,
 Description: Conversion tools for block devices
