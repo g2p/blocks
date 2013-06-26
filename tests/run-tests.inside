@@ -6,6 +6,9 @@ mkdir -vp /run/lock /var/lock
 if test -e /etc/lvm/archive; then mount -t tmpfs tmpfs /etc/lvm/archive; fi
 if test -e /etc/lvm/backup; then mount -t tmpfs tmpfs /etc/lvm/backup; fi
 
+DISK=$VIDO_DISK0
+P1NAME=$(basename ${DISK}1)
+
 coverage-3.3 erase
 # shopt -s expand_aliases also works
 function blocks {
@@ -17,11 +20,12 @@ function blocks {
 sgdisk --new=1:1M:+127M --new=2:129M:+127M \
     --new=3:256M:+128M --new=4:384M:+128M \
     --new=5:512M:+260M --new=6:772M:+124M \
-    -p /dev/ubda
+    -p $DISK
 
-mkfs.ext4 /dev/ubda1
-blocks to-lvm /dev/ubda1 --vg-name=VG
-! blocks to-lvm /dev/ubda1
+
+mkfs.ext4 ${DISK}1
+blocks to-lvm ${DISK}1 --vg-name=VG
+! blocks to-lvm ${DISK}1
 
 dd if=/dev/urandom of=keyfile bs=64k count=1
 
@@ -34,76 +38,76 @@ cryptsetup luksOpen --key-file=keyfile -- "$loop" whispers
 mkfs.ext4 /dev/mapper/whispers
 blocks to-bcache -- "$loop"
 
-cryptsetup --batch-mode luksFormat /dev/ubda1 keyfile
-cryptsetup luksOpen --key-file=keyfile /dev/ubda1 whispers
+cryptsetup --batch-mode luksFormat ${DISK}1 keyfile
+cryptsetup luksOpen --key-file=keyfile ${DISK}1 whispers
 mkfs.ext4 /dev/mapper/whispers
-blocks to-lvm /dev/ubda1
+blocks to-lvm ${DISK}1
 
 # go back to unencrypted, otherwise some tests would ask for passphrases
-mkfs.ext4 /dev/ubda1
+mkfs.ext4 ${DISK}1
 # resize should require fsck if the fs has been mounted
 # XXX doesn't check in practice
 mkdir -p mnt
-mount /dev/ubda1 mnt
+mount ${DISK}1 mnt
 touch mnt/ts
 umount mnt
-blocks to-lvm /dev/ubda1 --vg-name=VG
-! blocks to-lvm /dev/ubda1
+blocks to-lvm ${DISK}1 --vg-name=VG
+! blocks to-lvm ${DISK}1
 
 vgchange -ay
-blocks resize --resize-device /dev/mapper/VG-ubda1 64M
+blocks resize --resize-device /dev/mapper/VG-$P1NAME 64M
 # will round up
-blocks resize --resize-device /dev/mapper/VG-ubda1 95M
-blocks resize /dev/mapper/VG-ubda1 64M
-blocks resize /dev/mapper/VG-ubda1 96M
+blocks resize --resize-device /dev/mapper/VG-$P1NAME 95M
+blocks resize /dev/mapper/VG-$P1NAME 64M
+blocks resize /dev/mapper/VG-$P1NAME 96M
 vgchange -an
 
-mkfs.xfs /dev/ubda6
-blocks resize --resize-device /dev/ubda6 128M
-! blocks resize --resize-device /dev/ubda6 120M
-mkfs.reiserfs -q /dev/ubda6
-blocks resize --resize-device /dev/ubda6 132M
-mkfs.ext4 /dev/ubda6
-blocks resize --resize-device /dev/ubda6 128M
+mkfs.xfs ${DISK}6
+blocks resize --resize-device ${DISK}6 128M
+! blocks resize --resize-device ${DISK}6 120M
+mkfs.reiserfs -q ${DISK}6
+blocks resize --resize-device ${DISK}6 132M
+mkfs.ext4 ${DISK}6
+blocks resize --resize-device ${DISK}6 128M
 
 # Btrfs sb identification fails, but _BHRfS_M does appear
 # in the strace, what drugs is blkid on?
 # blkid won't recognise a btrfs filesystem smaller than 256m
 # (also btrfs can't shrink a 256m fs, though it can create a smaller one)
-mkfs.btrfs /dev/ubda5
-#strace -s1024 -f blkid -p -c /dev/null /dev/ubda5
-blocks to-lvm /dev/ubda5 --join=VG
-! blocks to-lvm /dev/ubda5
+mkfs.btrfs ${DISK}5
+#strace -s1024 -f blkid -p -c /dev/null ${DISK}5
+blocks to-lvm ${DISK}5 --join=VG
+! blocks to-lvm ${DISK}5
 
-blocks to-bcache /dev/ubda2
-! blocks to-bcache /dev/ubda2
+blocks to-bcache ${DISK}2
+! blocks to-bcache ${DISK}2
 
 # Can't shrink an unrecognised partition
-! blocks to-bcache /dev/ubda4
-#mkfs.btrfs /dev/ubda3
+! blocks to-bcache ${DISK}4
+#mkfs.btrfs ${DISK}3
 # ReiserFS has too much interactivity
-#mkfs.reiserfs -q /dev/ubda3
-mkfs.nilfs2 -B 1024 /dev/ubda3
-blkid /dev/ubda3
+#mkfs.reiserfs -q ${DISK}3
+mkfs.nilfs2 -B 1024 ${DISK}3
+blkid ${DISK}3
 
-blocks to-bcache /dev/ubda4
-! blocks to-bcache /dev/ubda4
+blocks to-bcache ${DISK}4
+! blocks to-bcache ${DISK}4
 
 vgchange -ay
 #ls -Artlh /dev/mapper
 
 vgcfgbackup --file before VG
-blkid /dev/mapper/VG-ubda1
-blocks --debug to-bcache /dev/mapper/VG-ubda1
+blkid /dev/mapper/VG-$P1NAME
+blocks --debug to-bcache /dev/mapper/VG-$P1NAME
 vgcfgbackup --file after VG
-bcache-super-show /dev/mapper/VG-ubda1
-! blocks to-bcache /dev/mapper/VG-ubda1
-blocks --debug rotate /dev/mapper/VG-ubda1
+bcache-super-show /dev/mapper/VG-$P1NAME
+! blocks to-bcache /dev/mapper/VG-$P1NAME
+blocks --debug rotate /dev/mapper/VG-$P1NAME
 vgcfgbackup --file before.restored VG
-! blocks rotate /dev/mapper/VG-ubda1
-lvchange --refresh VG/ubda1
-blkid /dev/mapper/VG-ubda1
-blocks --debug to-bcache /dev/mapper/VG-ubda1
+! blocks rotate /dev/mapper/VG-$P1NAME
+lvchange --refresh VG/$P1NAME
+blkid /dev/mapper/VG-$P1NAME
+blocks --debug to-bcache /dev/mapper/VG-$P1NAME
 vgcfgbackup --file after.twice VG
 
 # Those must be identical except for seqno and various timestamps
