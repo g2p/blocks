@@ -23,20 +23,18 @@ converting it to various RAID levels with `lvconvert --type=raidN
 ## bcache conversion
 
 `blocks to-bcache` converts a block device (partition, logical volume,
-LUKS device) to use bcache.  If `--join=<cset>` is used the device joins
-an existing cache set.
+LUKS device) to use bcache.  If `--join=<cset-uuid>` is used the device
+joins an existing cache set.  Otherwise you will need to [create
+and attach the cache device
+manually](http://atlas.evilpiepirate.org/git/linux-bcache.git/tree/Documentation/bcache.txt?h=bcache-dev).
 
-A development version of the bcache cli utilities is required.
+You will need to install bcache-tools:
+
+* <http://atlas.evilpiepirate.org/git/bcache-tools.git/>
+
 Conversion makes no demands on the kernel, but at runtime, you need
-an up-to-date kernel that reads the latest bcache format.  Kent
-Overstreet's repository has it starting with the bcache branch.
-My own branch currently adds resizing support on top of that.
-
-* <https://github.com/g2p/bcache-tools> (required)
-* <https://github.com/g2p/linux/tree/bcache> (option 1, a few extra
-  features)
-* <http://atlas.evilpiepirate.org/git/linux-bcache.git/> (option 2,
-  upstream)
+Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/tree/v3.10+bcache) currently adds
+resizing support on top of [Kent Overstreet's upstream branch](http://atlas.evilpiepirate.org/git/linux-bcache.git/).
 
 # Requirements
 
@@ -75,7 +73,7 @@ or you can install from source:
 Install LVM.
 
 Edit your /etc/fstab to refer to filesystems by UUID, and regenerate
-your initramfs so that it picks up the new tools.
+your initramfs so that it picks up the new tools and the new fstab.
 
 With grub2, you don't need to switch to a separate boot
 partition, but make sure grub2 installs lvm.mod inside your /boot.
@@ -86,13 +84,12 @@ choice), install blocks, and convert.
 
 ## Converting your root filesystem to bcache
 
-Install bcache-tools, build and install the bcache kernel from the above
-links.
+Install bcache-tools and a recent kernel.
 
 Edit your /etc/fstab to refer to filesystems by UUID, and regenerate
-your initramfs so that it picks up the new tools.  Those tools currently
-assume you use update-initramfs, but since they are udev-based they
-may easily be ported to other distributions.
+your initramfs so that it picks up the new tools and the new fstab.
+Those tools currently assume you use update-initramfs, but since they
+are udev-based they may easily be ported to other distributions.
 
 Edit your grub.cfg to refer to filesystems by UUID on the kernel
 command-line (this is often the case, except when you are already using
