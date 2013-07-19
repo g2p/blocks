@@ -26,13 +26,24 @@ converting it to various RAID levels with `lvconvert --type=raidN
 LUKS device) to use bcache.  If `--join=<cset-uuid>` is used the device
 joins an existing cache set.  Otherwise you will need to [create
 and attach the cache device
-manually](http://atlas.evilpiepirate.org/git/linux-bcache.git/tree/Documentation/bcache.txt?h=bcache-dev).
+manually](http://atlas.evilpiepirate.org/git/linux-bcache.git/tree/Documentation/bcache.txt?h=bcache-dev#n80).
+
+blocks will pick one of several conversion strategies:
+
+* one for partitions, which requires a shrinkable filesystem or free space
+immediately before the partition to convert
+* one for LUKS volumes
+* one for LVM logical volumes
+
+When the first two strategies are unavailable, you can still convert
+to bcache by converting to LVM first, then converting the new LV to
+bcache.
 
 You will need to install bcache-tools:
 
 * <http://atlas.evilpiepirate.org/git/bcache-tools.git/>
 
-Conversion makes no demands on the kernel, but at runtime, you need
+Conversion makes no demands on the kernel, but to use bcache, you need
 Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/tree/v3.10+bcache) currently adds
 resizing support on top of [Kent Overstreet's upstream branch](http://atlas.evilpiepirate.org/git/linux-bcache.git/).
 
