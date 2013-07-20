@@ -1607,7 +1607,8 @@ def cmd_to_lvm(args):
         lvname = block_stack.fslabel
     else:
         lvname = os.path.basename(device.devpath)
-    assert all(ch in ASCII_ALNUM_WHITELIST for ch in lvname)
+    if not all(ch in ASCII_ALNUM_WHITELIST for ch in lvname):
+        lvname = 'lv1'
 
     pe_sectors = bytes_to_sector(pe_size)
     # -1 because we reserve pe_size for the lvm label and one metadata area
