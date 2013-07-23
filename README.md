@@ -44,7 +44,7 @@ You will need to install bcache-tools:
 * <http://atlas.evilpiepirate.org/git/bcache-tools.git/>
 
 Conversion makes no demands on the kernel, but to use bcache, you need
-Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/tree/v3.10+bcache) currently adds
+Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/commits/for-3.11/bcache) currently adds
 resizing support on top of [Kent Overstreet's upstream branch](http://atlas.evilpiepirate.org/git/linux-bcache.git/).
 
 # Requirements
