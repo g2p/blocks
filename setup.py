@@ -21,7 +21,8 @@ setup(
     # See requirements.txt for installable versions
     install_requires=[
         'python-augeas >= 0.4.2a0',
-        'pyparted > 3.10a0'],
+        'pyparted > 3.10a0',
+        'ipdb'],
     classifiers='''
         Programming Language :: Python :: 3
         Programming Language :: Python :: 3.3
