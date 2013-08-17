@@ -1,6 +1,7 @@
 language: python
 install:
 - lsb_release -a
+- sudo apt-get update
 - sudo apt-get install
     python3-minimal libparted-dev libaugeas0
     pkg-config gcc cryptsetup lvm2 liblzo2-dev
