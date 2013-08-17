@@ -101,7 +101,7 @@ def quiet_call(cmd, *args, **kwargs):
 
 def mk_dm(devname, table, readonly, exit_stack):
     print('TABLE {!r}'.format(table), file=sys.stderr)
-    cmd = 'dmsetup create --noudevsync --'.split() + [devname]
+    cmd = 'dmsetup create --verifyudev --'.split() + [devname]
     if readonly:
         cmd[2:2] = ['--readonly']
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
@@ -109,7 +109,7 @@ def mk_dm(devname, table, readonly, exit_stack):
     assert proc.returncode == 0
     exit_stack.callback(
         lambda: quiet_call(
-            'dmsetup remove --noudevsync --'.split() + [devname]))
+            'dmsetup remove --verifyudev --'.split() + [devname]))
 
 
 def aftersep(line, sep):
