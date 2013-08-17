@@ -100,6 +100,7 @@ def quiet_call(cmd, *args, **kwargs):
 
 
 def mk_dm(devname, table, readonly, exit_stack):
+    print('TABLE {!r}'.format(table), file=sys.stderr)
     cmd = 'dmsetup create --noudevsync --'.split() + [devname]
     if readonly:
         cmd[2:2] = ['--readonly']
