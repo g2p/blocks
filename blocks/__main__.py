@@ -1490,7 +1490,9 @@ def main():
         return
 
     args = parser.parse_args()
-    return args.action(args)
+    from ipdb import launch_ipdb_on_exception
+    with launch_ipdb_on_exception():
+        return args.action(args)
 
 
 def cmd_resize(args):
