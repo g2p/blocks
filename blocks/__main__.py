@@ -1058,8 +1058,9 @@ def synth_device(writable_hdr_size, rz_size, writable_end_size=0):
         lo_dev = subprocess.check_output(
             'losetup -f --show --'.split() + [imgf.name]
         ).rstrip().decode('ascii')
+        assert lo_dev.startswith('/'), lo_dv
         st.callback(
-            lambda: quiet_call('losetup -d --'.split() + [lo_dev]))
+            lambda: quiet_call('losetup -d'.split() + [lo_dev]))
         rozeros_devname = 'rozeros-{}'.format(uuid.uuid1())
         synth_devname = 'synthetic-{}'.format(uuid.uuid1())
         synth_devpath = '/dev/mapper/' + synth_devname
