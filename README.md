@@ -83,11 +83,11 @@ or you can install from source:
 
 Install LVM.
 
-Edit your /etc/fstab to refer to filesystems by UUID, and regenerate
+Edit your `/etc/fstab` to refer to filesystems by UUID, and regenerate
 your initramfs so that it picks up the new tools and the new fstab.
 
 With grub2, you don't need to switch to a separate boot
-partition, but make sure grub2 installs lvm.mod inside your /boot.
+partition, but make sure grub2 installs `lvm.mod` inside your `/boot`.
 
 Make sure your backups are up to date, boot to live media ([Ubuntu raring
 liveusb](http://cdimage.ubuntu.com/daily-live/current/) is a good
@@ -95,23 +95,33 @@ choice), install blocks, and convert.
 
 ## Converting your root filesystem to bcache
 
-Install bcache-tools and a recent kernel.
+Install bcache-tools and a recent kernel (3.10 or newer).
+If your distribution uses Dracut (Fedora), you need Dracut 0.31 or newer.
 
-Edit your /etc/fstab to refer to filesystems by UUID, and regenerate
+Edit your `/etc/fstab` to refer to filesystems by UUID, and regenerate
 your initramfs so that it picks up the new tools and the new fstab.
-Those tools currently assume you use update-initramfs, but since they
-are udev-based they may easily be ported to other distributions.
+On Debian, Ubuntu, and OpenSUSE, this is done with `update-initramfs -k all`.
+With Dracut, this is done with `dracut -f`.
 
-Edit your grub.cfg to refer to filesystems by UUID on the kernel
+Edit your `grub.cfg` to refer to filesystems by UUID on the kernel
 command-line (this is often the case, except when you are already using
-LVM, in which case update-grub tends to write a logical path).  Make
-sure you have a separate /boot partition.
+LVM, in which case `update-grub` tends to write a logical path).  Make
+sure you have a separate `/boot` partition.
 
 Make sure your backups are up to date, boot to live media ([Ubuntu raring
 liveusb](http://cdimage.ubuntu.com/daily-live/current/) is a good
 choice), install blocks, and convert.
 
-## Getting started
+## bcache on a fresh install
+
+When using a distro installer that doesn't support bcache
+at the partitioning stage, make sure the installer creates a
+separate `/boot` partition.
+
+Once the installer is done, you can follow the steps at
+[converting your root filesystem to bcache](#converting-your-root-filesystem-to-bcache).
+
+## Subcommand help
 
     blocks --help
     blocks <subcommand> --help
