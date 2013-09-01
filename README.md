@@ -26,7 +26,7 @@ converting it to various RAID levels with `lvconvert --type=raidN
 LUKS device) to use bcache.  If `--join=<cset-uuid>` is used the device
 joins an existing cache set.  Otherwise you will need to [create
 and attach the cache device
-manually](http://atlas.evilpiepirate.org/git/linux-bcache.git/tree/Documentation/bcache.txt?h=bcache-dev#n80).
+manually](http://evilpiepirate.org/git/linux-bcache.git/tree/Documentation/bcache.txt?h=bcache-dev#n80).
 
 blocks will pick one of several conversion strategies:
 
@@ -41,11 +41,11 @@ bcache.
 
 You will need to install bcache-tools:
 
-* <http://atlas.evilpiepirate.org/git/bcache-tools.git/>
+* <http://evilpiepirate.org/git/bcache-tools.git/>
 
 Conversion makes no demands on the kernel, but to use bcache, you need
 Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/commits/for-3.11/bcache) currently adds
-resizing support on top of [Kent Overstreet's upstream branch](http://atlas.evilpiepirate.org/git/linux-bcache.git/).
+resizing support on top of [Kent Overstreet's upstream branch](http://evilpiepirate.org/git/linux-bcache.git/).
 
 # Requirements
 
