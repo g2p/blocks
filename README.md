@@ -116,7 +116,9 @@ choice), install blocks, and convert.
 
 When using a distro installer that doesn't support bcache
 at the partitioning stage, make sure the installer creates a
-separate `/boot` partition.
+separate `/boot` partition.  Install everything on the HDD,
+using whatever layout you prefer (but I suggest LVM if you want
+multiple partitions).
 
 Once the installer is done, you can follow the steps at
 [converting your root filesystem to bcache](#converting-your-root-filesystem-to-bcache).
