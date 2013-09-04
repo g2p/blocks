@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import os
 import re
+import shutil
 import stat
 import string
 import struct
@@ -97,6 +98,32 @@ def quiet_call(cmd, *args, **kwargs):
             'Standard error:\n{}'.format(
                 cmd, proc.returncode, odat, edat), file=sys.stderr)
         raise subprocess.CalledProcessError(proc.returncode, cmd, odat)
+
+
+class MissingRequirement(Exception):
+    pass
+
+
+class Requirement:
+    @classmethod
+    def require(self, progress):
+        assert '/' not in self.cmd
+        if shutil.which(self.cmd) is None:
+            err = MissingRequirement(self)
+            progress.notify_error(
+                'Command {!r} not found, please install the {} package'
+                .format(self.cmd, self.pkg), err)
+            raise err
+
+
+class LVMReq(Requirement):
+    cmd = 'lvm'
+    pkg = 'lvm2'
+
+
+class BCacheReq(Requirement):
+    cmd = 'make-bcache'
+    pkg = 'bcache-tools'
 
 
 def mk_dm(devname, table, readonly, exit_stack):
@@ -1554,6 +1581,8 @@ def cmd_to_bcache(args):
             .format(device.devpath), file=sys.stderr)
         return 1
 
+    BCacheReq.require(progress)
+
     if device.is_partition:
         return part_to_bcache(device, debug, progress, join)
     elif device.is_lv:
@@ -1571,6 +1600,14 @@ def cmd_to_bcache(args):
 def cmd_to_lvm(args):
     device = BlockDevice(args.device)
     debug = args.debug
+    progress = CLIProgressHandler()
+
+    if device.superblock_type == 'LVM2_member':
+        print(
+            'Already a physical volume', file=sys.stderr)
+        return 1
+
+    LVMReq.require(progress)
 
     if args.join is not None:
         vg_info = subprocess.check_output(
@@ -1594,13 +1631,6 @@ def cmd_to_lvm(args):
     assert all(ch in ASCII_ALNUM_WHITELIST for ch in vgname)
 
     assert device.size % 512 == 0
-
-    if device.superblock_type == 'LVM2_member':
-        print(
-            'Already a physical volume', file=sys.stderr)
-        return 1
-
-    progress = CLIProgressHandler()
 
     block_stack = get_block_stack(device, progress)
 
