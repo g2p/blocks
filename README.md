@@ -39,13 +39,33 @@ When the first two strategies are unavailable, you can still convert
 to bcache by converting to LVM first, then converting the new LV to
 bcache.
 
-You will need to install bcache-tools:
+You will need to install bcache-tools from one of these locations:
 
 * <http://evilpiepirate.org/git/bcache-tools.git/>
+* <https://launchpad.net/~g2p/+archive/storage/>
 
 Conversion makes no demands on the kernel, but to use bcache, you need
 Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/commits/for-3.11/bcache) currently adds
 resizing support on top of [Kent Overstreet's upstream branch](http://evilpiepirate.org/git/linux-bcache.git/).
+
+### maintboot mode
+
+Maintboot mode (`blocks to-bcache --maintboot`) is an easier way
+to convert root filesystems that doesn't require a LiveCD.
+[maintboot](https://github.com/g2p/maintboot) will run
+the conversion from a minimal boot environment.
+This is currently tested on Ubuntu; ports to other distros
+are welcome.
+
+# Ubuntu PPA
+
+You can install python3-blocks from a PPA and skip the rest
+of the installation section.
+
+    sudo apt-get install software-properties-common
+    sudo add-apt-repository ppa:g2p/storage
+    sudo apt-get update
+    sudo apt-get install python3-blocks bcache-tools
 
 # Requirements
 
@@ -108,7 +128,12 @@ command-line (this is often the case, except when you are already using
 LVM, in which case `update-grub` tends to write a logical path).  Make
 sure you have a separate `/boot` partition.
 
-Make sure your backups are up to date, boot to live media ([Ubuntu raring
+If you are using a compatible distro, you can run:
+
+    sudo blocks to-bcache --maintboot /dev/<root-device>
+
+Otherwise,
+make sure your backups are up to date, boot to live media ([Ubuntu raring
 liveusb](http://cdimage.ubuntu.com/daily-live/current/) is a good
 choice), install blocks, and convert.
 
