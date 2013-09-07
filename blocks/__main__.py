@@ -1636,6 +1636,12 @@ def cmd_maintboot_impl(args):
         urllib.parse.unquote(os.environ['BLOCKS_ARGS']),
         object_hook=lambda args: types.SimpleNamespace(**args))
     assert kargs.command == 'to-bcache'
+
+    # wait for devices to come up (30s max)
+    subprocess.check_call(['udevadm', 'settle', '--timeout=30'])
+    # activate lvm volumes
+    subprocess.check_call(['lvm', 'vgchange', '-ay'])
+
     kargs.device = BlockDevice.by_uuid(kargs.device).devpath
     kargs.maintboot = False
     return cmd_to_bcache(kargs)
