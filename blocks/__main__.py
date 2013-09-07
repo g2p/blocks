@@ -1620,7 +1620,7 @@ def cmd_to_bcache(args):
         subprocess.check_call(
             ['maintboot', '--pkgs']
             + 'python3-blocks util-linux dash mount base-files'
-            '  lvm2 cryptsetup-bin bcache-tools'
+            '  lvm2 cryptsetup-bin bcache-tools libc-bin'
             '  nilfs-tools reiserfsprogs xfsprogs e2fsprogs btrfs-tools'.split()
             + ['--initscript', pkg_resources.resource_filename(
                 'blocks', 'maintboot.init')]
