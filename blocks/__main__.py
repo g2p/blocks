@@ -21,7 +21,7 @@ import pkg_resources
 # 4MiB PE, for vgmerge compatibility
 LVM_PE_SIZE = 4 * 1024 ** 2
 
-ASCII_ALNUM_WHITELIST = string.ascii_letters + string.digits
+ASCII_ALNUM_WHITELIST = string.ascii_letters + string.digits + '.'
 
 
 # Fairly strict, snooping an incorrect mapping would be bad
@@ -1624,7 +1624,7 @@ def cmd_to_lvm(args):
         vgname = args.vgname
         pe_size = LVM_PE_SIZE
     else:
-        vgname = os.path.basename(device.devpath)
+        vgname = 'vg.' + os.path.basename(device.devpath)
         pe_size = LVM_PE_SIZE
 
     assert vgname
