@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name='blocks',
-    version='0.1.1',
+    version='0.1.3',
     author='Gabriel de Perthuis',
     author_email='g2p.code+blocks@gmail.com',
     url='https://github.com/g2p/blocks',
