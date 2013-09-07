@@ -1,0 +1,2 @@
+# This script shouldn't be executable outside of kexec
+python3-blocks binary: script-not-executable usr/lib/python3/dist-packages/blocks/maintboot.init
