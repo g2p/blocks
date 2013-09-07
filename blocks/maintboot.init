@@ -8,7 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ldconfig
 blocks maintboot-impl
 echo s > /proc/sysrq-trigger
-echo o > /proc/sysrq-trigger
-# wait for system to halt
+echo b > /proc/sysrq-trigger
+# wait for system to reboot
 read foo
 
