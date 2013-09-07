@@ -1608,6 +1608,14 @@ def cmd_to_bcache(args):
         return 1
 
     if args.maintboot:
+        return call_maintboot(
+            device, 'to-bcache', debug=args.debug, join=args.join)
+    else:
+        return impl(
+            device=device, debug=args.debug, progress=progress, join=args.join)
+
+
+def call_maintboot(device, command, **args):
         fsuuid = Filesystem(device).fsuuid
         if not fsuuid:
             print(
@@ -1615,20 +1623,15 @@ def cmd_to_bcache(args):
                 file=sys.stderr)
             return 1
         encoded = urllib.parse.quote(json.dumps(dict(
-            command='to-bcache', device=fsuuid,
-            debug=args.debug, join=args.join)))
+            command=command, device=fsuuid, **args)))
         subprocess.check_call(
             ['maintboot', '--pkgs']
-            + 'python3-blocks util-linux dash mount base-files'
-            '  lvm2 cryptsetup-bin bcache-tools libc-bin'
-            '  nilfs-tools reiserfsprogs xfsprogs e2fsprogs btrfs-tools'.split()
+            + 'python3-blocks util-linux dash mount base-files libc-bin'
+            '  nilfs-tools reiserfsprogs xfsprogs e2fsprogs btrfs-tools'
+            '  lvm2 cryptsetup-bin bcache-tools'.split()
             + ['--initscript', pkg_resources.resource_filename(
                 'blocks', 'maintboot.init')]
             + ['--append', 'BLOCKS_ARGS=' + encoded])
-
-    else:
-        return impl(
-            device=device, debug=args.debug, progress=progress, join=args.join)
 
 
 def cmd_maintboot_impl(args):
