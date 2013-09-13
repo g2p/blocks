@@ -128,11 +128,21 @@ command-line (this is often the case, except when you are already using
 LVM, in which case `update-grub` tends to write a logical path).  Make
 sure you have a separate `/boot` partition.
 
-If you are using a compatible distro, you can run:
+1. If you don't have a cache device yet
 
-    sudo blocks to-bcache --maintboot /dev/<root-device>
+        sudo make-bcache -C /dev/<SSD-backed-device>
+   This will give you a cache-set uuid
 
-Otherwise,
+2. If you already have a cache device
+
+        ls /sys/fs/bcache
+   And copy the cache-set uuid
+
+3. Finally, if you have a maintboot-compatible distro, run:
+
+        sudo blocks to-bcache --maintboot /dev/<root-device> --join <cset-uuid>
+
+4. Otherwise,
 make sure your backups are up to date, boot to live media ([Ubuntu raring
 liveusb](http://cdimage.ubuntu.com/daily-live/current/) is a good
 choice), install blocks, and convert.
