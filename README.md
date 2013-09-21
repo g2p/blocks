@@ -39,10 +39,10 @@ When the first two strategies are unavailable, you can still convert
 to bcache by converting to LVM first, then converting the new LV to
 bcache.
 
-You will need to install bcache-tools from one of these locations:
+You will need to install bcache-tools, which is available here:
 
 * <http://evilpiepirate.org/git/bcache-tools.git/>
-* <https://launchpad.net/~g2p/+archive/storage/>
+* <https://launchpad.net/~g2p/+archive/storage/> (`sudo add-apt-repository ppa:g2p/storage`)
 
 Conversion makes no demands on the kernel, but to use bcache, you need
 Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/commits/for-3.11/bcache) currently adds
@@ -51,11 +51,11 @@ resizing support on top of [Kent Overstreet's upstream branch](http://evilpiepir
 ### maintboot mode
 
 Maintboot mode (`blocks to-bcache --maintboot`) is an easier way
-to convert root filesystems that doesn't require a LiveCD.
+to convert in-use devices that doesn't require a LiveCD.
 [maintboot](https://github.com/g2p/maintboot) will run
-the conversion from a minimal boot environment.
-This is currently tested on Ubuntu; ports to other distros
-are welcome.
+the conversion from an in-memory boot environment.
+This is currently tested on Ubuntu; ports to other
+distributions are welcome.
 
 # Ubuntu PPA
 
@@ -104,7 +104,7 @@ or you can install from source:
 Install LVM.
 
 Edit your `/etc/fstab` to refer to filesystems by UUID, and regenerate
-your initramfs so that it picks up the new tools and the new fstab.
+your initramfs so that it picks up the new tools.
 
 With grub2, you don't need to switch to a separate boot
 partition, but make sure grub2 installs `lvm.mod` inside your `/boot`.
@@ -119,7 +119,7 @@ Install bcache-tools and a recent kernel (3.10 or newer).
 If your distribution uses Dracut (Fedora), you need Dracut 0.31 or newer.
 
 Edit your `/etc/fstab` to refer to filesystems by UUID, and regenerate
-your initramfs so that it picks up the new tools and the new fstab.
+your initramfs so that it picks up the new tools.
 On Debian, Ubuntu, and OpenSUSE, this is done with `update-initramfs -k all`.
 With Dracut, this is done with `dracut -f`.
 
@@ -128,18 +128,29 @@ command-line (this is often the case, except when you are already using
 LVM, in which case `update-grub` tends to write a logical path).  Make
 sure you have a separate `/boot` partition.
 
-If you are using a compatible distro, you can run:
+1. If you don't have a cache device yet
 
-    sudo blocks to-bcache --maintboot /dev/<root-device>
+        sudo make-bcache -C /dev/<SSD-backed-device>
+   This will give you a cache-set uuid
 
-Otherwise,
+2. If you already have a cache device
+
+        ls /sys/fs/bcache
+   And copy the cache-set uuid
+
+3. Finally, if you have a maintboot-compatible distribution, run:
+
+        sudo blocks to-bcache --maintboot /dev/<root-device> --join <cset-uuid>
+   If you are using encryption, use the encrypted device as the root device.
+
+4. Otherwise,
 make sure your backups are up to date, boot to live media ([Ubuntu raring
 liveusb](http://cdimage.ubuntu.com/daily-live/current/) is a good
 choice), install blocks, and convert.
 
 ## bcache on a fresh install
 
-When using a distro installer that doesn't support bcache
+When using a distribution installer that doesn't support bcache
 at the partitioning stage, make sure the installer creates a
 separate `/boot` partition.  Install everything on the HDD,
 using whatever layout you prefer (but I suggest LVM if you want

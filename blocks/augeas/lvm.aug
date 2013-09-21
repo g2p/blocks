@@ -21,7 +21,7 @@ module LVM =
 	 * libdm uses a blacklist but I prefer the safer whitelist approach. *)
 	(* View: identifier
 	 * The left hand side of a definition *)
-	let identifier = /[a-zA-Z0-9_-]+/
+	let identifier = /[a-zA-Z0-9_.-]+/
 
 	(* strings can contain backslash-escaped dquotes, but I don't know
 	 * how to get the message across to augeas *)
