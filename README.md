@@ -120,7 +120,7 @@ If your distribution uses Dracut (Fedora), you need Dracut 0.31 or newer.
 
 Edit your `/etc/fstab` to refer to filesystems by UUID, and regenerate
 your initramfs so that it picks up the new tools.
-On Debian, Ubuntu, and OpenSUSE, this is done with `update-initramfs -k all`.
+On Debian, Ubuntu, and OpenSUSE, this is done with `update-initramfs -u -k all`.
 With Dracut, this is done with `dracut -f`.
 
 Edit your `grub.cfg` to refer to filesystems by UUID on the kernel
