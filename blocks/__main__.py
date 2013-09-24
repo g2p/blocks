@@ -1700,6 +1700,12 @@ def cmd_to_lvm(args):
     # The position of the moved pe
     pe_newpos = pe_count * pe_size
 
+    # bootloader embedding area, sector units
+    assert pe_size >= 4096, pe_size
+    # default to 1M, to match the bootloader area on a 1M-aligned ptable
+    ba_start = 2048
+    ba_size = 2048
+
     if debug:
         print(
             'pe {} pe_newpos {} devsize {}'
@@ -1761,6 +1767,8 @@ def cmd_to_lvm(args):
 
                         pe_start = {pe_sectors}
                         pe_count = {pe_count}
+                        ba_start = {ba_start}
+                        ba_size = {ba_size}
                     }}
                 }}
                 logical_volumes {{
@@ -1799,6 +1807,8 @@ def cmd_to_lvm(args):
                 lv_uuid=lv_uuid,
                 pe_count=pe_count,
                 pe_count_pred=pe_count - 1,
+                ba_start=ba_start,
+                ba_size=ba_size,
             )))
         cfgf.flush()
 
