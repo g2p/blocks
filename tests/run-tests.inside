@@ -9,10 +9,11 @@ if test -e /etc/lvm/backup; then mount -t tmpfs tmpfs /etc/lvm/backup; fi
 DISK=$VIDO_DISK0
 P1NAME=$(basename ${DISK}1)
 
-coverage-3.3 erase
+function coverage { python3.3 -m coverage "$@"; }
+coverage erase
 # shopt -s expand_aliases also works
 function blocks {
-    coverage-3.3 run --append --source=blocks -m blocks "$@"
+    coverage run --append --source=blocks -m blocks "$@"
 }
 
 ! blocks
