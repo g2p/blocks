@@ -559,19 +559,65 @@ class SimpleContainer(BlockData):
     offset = None
 
 
+def starts_with_word(line, word):
+    return line.startswith(word) and line.split(maxsplit=1)[0] == word
+
+
 class BCacheBacking(SimpleContainer):
     def read_superblock(self):
         self.offset = None
+        self.version = None
 
         proc = subprocess.Popen(
             ['bcache-super-show', '--', self.device.devpath],
             stdout=subprocess.PIPE)
         for line in proc.stdout:
-            if line.startswith(b'dev.data.first_sector'):
+            if starts_with_word(line, b'sb.version'):
+                line = line.decode('ascii')
+                self.version = int(line.split()[1])
+            elif starts_with_word(line, b'dev.data.first_sector'):
                 line = line.decode('ascii')
                 self.offset = int(line.split(maxsplit=1)[1]) * 512
         proc.wait()
         assert proc.returncode == 0
+        assert self.offset is not None
+
+    @property
+    def is_backing(self):
+        # Whitelist versions, just in case newer backing devices
+        # are too different
+        return self.version in (1, 4)
+
+    def is_activated(self):
+        return os.path.exists(self.device.sysfspath + '/bcache')
+
+    @memoized_property
+    def cached_device(self):
+        if not self.is_activated():
+            # XXX How synchronous is this?
+            with open('/sys/fs/bcache/register', 'w') as br:
+                br.write(self.devpath + '\n')
+        return BlockDevice(devpath_from_sysdir(self.device.sysfspath + '/bcache/dev'))
+
+    def deactivate(self):
+        with open(self.device.sysfspath + '/bcache/stop', 'w') as sf:
+            # XXX Asynchronous
+            sf.write('stop\n')
+        assert not self.is_activated()
+        type(self).cached_device._reset(self)
+
+    def grow_nonrec(self, upper_bound):
+        if upper_bound != self.device.size:
+            raise NotImplementedError
+        if not self.is_activated():
+            # Nothing to do, bcache will pick up the size on activation
+            return
+        with open(self.device.sysfspath + '/bcache/resize', 'w') as sf:
+            # XXX How synchronous is this?
+            sf.write('max\n')
+        self.cached_device.reset_size()
+        assert self.cached_device.size + self.offset == upper_bound, (self.cached_device.size, self.offset, upper_bound)
+        return upper_bound
 
 
 class LUKS(SimpleContainer):
@@ -789,13 +835,13 @@ class BtrFS(Filesystem):
             stdout=subprocess.PIPE)
 
         for line in proc.stdout:
-            if line.startswith(b'dev_item.devid'):
+            if starts_with_word(line, b'dev_item.devid'):
                 line = line.decode('ascii')
                 self.devid = int(line.split(maxsplit=1)[1])
-            elif line.startswith(b'sectorsize'):
+            elif starts_with_word(line, b'sectorsize'):
                 line = line.decode('ascii')
                 self.block_size = int(line.split(maxsplit=1)[1])
-            elif line.startswith(b'dev_item.total_bytes'):
+            elif starts_with_word(line, b'dev_item.total_bytes'):
                 line = line.decode('ascii')
                 self.size_bytes = int(line.split(maxsplit=1)[1])
         proc.wait()
@@ -992,6 +1038,15 @@ def get_block_stack(device, progress):
             wrapper = LUKS(device)
             stack.append(wrapper)
             device = wrapper.cleartext_device
+            continue
+        elif device.has_bcache_superblock:
+            wrapper = BCacheBacking(device)
+            wrapper.read_superblock()
+            if not wrapper.is_backing:
+                # We only want backing, not all bcache superblocks
+                raise UnsupportedSuperblock(device)
+            stack.append(wrapper)
+            device = wrapper.cached_device
             continue
 
         if device.superblock_type in {'ext2', 'ext3', 'ext4'}:
