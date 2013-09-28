@@ -112,11 +112,9 @@ class Requirement:
     def require(self, progress):
         assert '/' not in self.cmd
         if shutil.which(self.cmd) is None:
-            err = MissingRequirement(self)
-            progress.notify_error(
+            progress.bail(
                 'Command {!r} not found, please install the {} package'
-                .format(self.cmd, self.pkg), err)
-            raise err
+                .format(self.cmd, self.pkg), MissingRequirement(self))
 
 
 class LVMReq(Requirement):
@@ -364,14 +362,12 @@ class PartitionTable(BlockData):
         part = None
         for part in self._iter_range(start_sector, end_sector):
             if part.geometry.start >= start_sector:
-                err = OverlappingPartition(start, end, part)
-                progress.notify_error(
+                progress.bail(
                     'The range we want to reserve overlaps with '
                     'the start of partition {} ({}), the shrinking strategy '
                     'will not work.'.format(
                         part.path, _ped.partition_type_get_name(part.type)),
-                    err)
-                raise err
+                    OverlappingPartition(start, end, part))
 
         if part is None:
             # No partitions inside the range, we're good
@@ -1003,11 +999,10 @@ class BlockStack:
                     'Will shrink the filesystem ({}) by {} bytes'
                     .format(fstype, shrink_size))
             else:
-                err = CantShrink(self.topmost)
-                progress.notify_error(
+                progress.bail(
                     'Can\'t shrink filesystem ({}), but need another {} bytes '
-                    'at the end'.format(fstype, shrink_size), err)
-                raise err
+                    'at the end'.format(fstype, shrink_size),
+                    CantShrink(self.topmost))
         else:
             progress.notify(
                 'The filesystem ({}) leaves enough room, '
@@ -1044,7 +1039,9 @@ def get_block_stack(device, progress):
             wrapper.read_superblock()
             if not wrapper.is_backing:
                 # We only want backing, not all bcache superblocks
-                raise UnsupportedSuperblock(device)
+                progress.bail(
+                    'BCache device isn\'t a backing device',
+                    UnsupportedSuperblock(device))
             stack.append(wrapper)
             device = wrapper.cached_device
             continue
@@ -1062,12 +1059,11 @@ def get_block_stack(device, progress):
         else:
             err = UnsupportedSuperblock(device=device)
             if device.superblock_type is None:
-                progress.notify_error('Unrecognised superblock', err)
+                progress.bail('Unrecognised superblock', err)
             else:
-                progress.notify_error(
+                progress.bail(
                     'Unsupported superblock type: {}'
                     .format(err.device.superblock_type), err)
-            raise err
 
         # only reached when we ended on a filesystem
         return BlockStack(stack)
@@ -1118,19 +1114,26 @@ class ProgressListener:
     pass
 
 
+class DefaultProgressHandler(ProgressListener):
+    """A progress listener that logs messages and raises exceptions
+    """
+
+    def notify(self, msg):
+        logging.info(msg)
+
+    def bail(self, msg, err):
+        logging.error(msg)
+        raise err
+
+
 class CLIProgressHandler(ProgressListener):
-    """A progress listener that prints messages and exits on error.
+    """A progress listener that prints messages and exits on error
     """
 
     def notify(self, msg):
         print(msg)
 
-    def notify_error(self, msg, err):
-        """Takes an exception so ProgressListener callers remember to raise it.
-
-        Even though this implementation won't return, others would.
-        """
-
+    def bail(self, msg, err):
         print(msg, file=sys.stderr)
         sys.exit(2)
 
