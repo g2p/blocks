@@ -362,6 +362,14 @@ class PartitionTable(BlockData):
         part = None
         for part in self._iter_range(start_sector, end_sector):
             if part.geometry.start >= start_sector:
+                if part.number == -1:
+                    progress.bail(
+                        'The range we want to reserve overlaps with '
+                        'the start of a reserved area at [{}, {}] ({}), '
+                        'the shrinking strategy will not work.'.format(
+                            part.geometry.start, part.geometry.end,
+                            _ped.partition_type_get_name(part.type)),
+                        OverlappingPartition(start, end, part))
                 progress.bail(
                     'The range we want to reserve overlaps with '
                     'the start of partition {} ({}), the shrinking strategy '
