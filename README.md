@@ -28,10 +28,15 @@ joins an existing cache set.  Otherwise you will need to [create
 and attach the cache device
 manually](http://evilpiepirate.org/git/linux-bcache.git/tree/Documentation/bcache.txt?h=bcache-dev#n80).
 
-blocks will pick one of several conversion strategies:
+`blocks` will pick one of several conversion strategies:
 
 * one for partitions, which requires a shrinkable filesystem or free space
-immediately before the partition to convert
+immediately before the partition to convert.  Converting a [logical partition](
+https://en.wikipedia.org/wiki/Extended_boot_record)
+to bcache is not supported:  if `blocks` complains about overlapping metadata
+in the middle of the disk, please [use gdisk to convert your MBR disk to GPT](
+http://falstaff.agner.ch/2012/11/20/convert-mbr-partition-table-to-gpt-ubuntu/)
+and reinstall your bootloader before proceeding with the bcache conversion.
 * one for LUKS volumes
 * one for LVM logical volumes
 
