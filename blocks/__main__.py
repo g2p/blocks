@@ -169,6 +169,12 @@ class BlockDevice:
         return os.open(
             self.devpath, os.O_SYNC | os.O_RDWR | os.O_EXCL)
 
+    @contextlib.contextmanager
+    def open_excl_ctx(self):
+        dev_fd = self.open_excl()
+        yield dev_fd
+        os.close(dev_fd)
+
     @memoized_property
     def ptable_type(self):
         # TODO: also detect an MBR other than protective,
@@ -692,6 +698,7 @@ class LUKS(SimpleContainer):
         # Low-level
         # https://cryptsetup.googlecode.com/git/docs/on-disk-format.pdf
 
+        self.sb_end = None
         magic, version = struct.unpack('>6sH', os.pread(fd, 8, 0))
         assert magic == b'LUKS\xBA\xBE', magic
         assert version == 1
@@ -1430,14 +1437,11 @@ def lv_to_bcache(device, debug, progress, join):
     block_stack.deactivate()
     del block_stack
 
-    dev_fd = device.open_excl()
-
-    synth_bdev = make_bcache_sb(pe_size, data_size, join)
-    print('Copying the bcache superblock... ', end='', flush=True)
-    synth_bdev.copy_to_physical(dev_fd, shift_by=-pe_size)
-    print('ok')
-
-    os.close(dev_fd)
+    with device.open_excl_ctx() as dev_fd:
+        synth_bdev = make_bcache_sb(pe_size, data_size, join)
+        print('Copying the bcache superblock... ', end='', flush=True)
+        synth_bdev.copy_to_physical(dev_fd, shift_by=-pe_size)
+        print('ok')
     del dev_fd
 
     rotate_lv(
@@ -1506,9 +1510,8 @@ def part_to_bcache(device, debug, progress, join):
 
     # Check the partition we're about to convert isn't in use either,
     # otherwise the partition table couldn't be reloaded.
-    dev_fd = device.open_excl()
-    os.close(dev_fd)
-    del dev_fd
+    with device.open_excl_ctx():
+        pass
 
     print(
         'Shifting partition to start on the bcache superblock... ',
