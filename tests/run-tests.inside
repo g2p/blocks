@@ -70,6 +70,8 @@ mkfs.reiserfs -q ${DISK}6
 blocks resize --resize-device ${DISK}6 132M
 mkfs.ext4 ${DISK}6
 blocks resize --resize-device ${DISK}6 128M
+mkswap ${DISK}6
+blocks resize --resize-device ${DISK}6 120M
 
 # Btrfs sb identification fails, but _BHRfS_M does appear
 # in the strace, what drugs is blkid on?

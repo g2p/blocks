@@ -956,6 +956,60 @@ class ExtFS(Filesystem):
             'resize2fs --'.split() + [self.device.devpath, '%d' % block_count])
 
 
+class UnsupportedSwap(ValueError):
+    pass
+
+
+class Swap(Filesystem):
+    # Not exactly a filesystem
+    can_shrink = True
+
+    def is_mounted(self):
+        # parse /proc/swaps, see tab_parse.c
+        raise NotImplementedError
+
+    def read_superblock(self):
+        # No need to do anything, UUID and LABEL are already
+        # exposed through blkid
+        with self.device.open_excl_ctx() as dev_fd:
+            big_endian, version, last_page = self.__read_sb(dev_fd)
+        self.block_size = 4096
+        self.block_count = last_page + 1
+        self.big_endian = big_endian
+        self.version = version
+
+
+    def __read_sb(self, dev_fd):
+        # Assume 4k pages, bail otherwise
+        magic, = struct.unpack('10s', os.pread(dev_fd, 10, 4096 - 10))
+        if magic != b'SWAPSPACE2':
+            # Might be suspend data
+            raise UnsupportedSwap(magic)
+        version, last_page = struct.unpack('>II', os.pread(dev_fd, 8, 1024))
+        big_endian = True
+        if version != 1:
+            version0 = version
+            version, last_page = struct.unpack('<II', os.pread(dev_fd, 8, 1024))
+            big_endian = False
+        if version != 1:
+            raise UnsupportedSwap('Bad version', min(version, version0))
+        if not last_page:
+            raise UnsupportedSwap('Last page is zero')
+
+        return big_endian, version, last_page
+
+
+    def _resize(self, target_size):
+        # using mkswap+swaplabel like GParted would drop some metadata
+        if self.big_endian:
+            fmt = '>II'
+        else:
+            fmt = '<II'
+        with self.device.open_excl_ctx() as dev_fd:
+            os.pwrite(dev_fd, struct.pack(
+                fmt, self.version, target_size // self.block_size - 1), 1024)
+
+
 class BlockStack:
     def __init__(self, stack):
         self.stack = stack
@@ -1071,6 +1125,8 @@ def get_block_stack(device, progress):
             stack.append(NilFS(device))
         elif device.superblock_type == 'xfs':
             stack.append(XFS(device))
+        elif device.superblock_type == 'swap':
+            stack.append(Swap(device))
         else:
             err = UnsupportedSuperblock(device=device)
             if device.superblock_type is None:
