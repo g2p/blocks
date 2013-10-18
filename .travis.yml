@@ -9,7 +9,7 @@ install:
 - sudo apt-get build-dep btrfs-tools
 - which python3
 - wget
-    http://python-distribute.org/distribute_setup.py
+    https://bitbucket.org/pypa/setuptools/raw/bootstrap/ez_setup.py
     https://raw.github.com/pypa/pip/master/contrib/get-pip.py
     https://mirrors.kernel.org/ubuntu/pool/main/a/augeas/libaugeas0_1.0.0-0ubuntu1_amd64.deb
 - curl --compressed https://raw.github.com/g2p/kernels/master/linux.uml -o tests/linux.uml
@@ -17,7 +17,7 @@ install:
 - sudo dpkg -i libaugeas0*deb
 - export PATH=$PATH:$HOME/.local/bin:$PWD/btrfs-progs
 - export PIP_USE_MIRRORS=true PIP_DOWNLOAD_CACHE=~/.cache/pip
-- python3.3 distribute_setup.py --user
+- python3.3 ez_setup.py --user
 - easy_install-3.3 --user pip
 - pip-3.3 install --user
     -e. git+https://github.com/g2p/python-augeas.git@v0.4.2a1#egg=python-augeas

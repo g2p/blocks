@@ -58,8 +58,13 @@ def align(size, align):
 
 
 class UnsupportedSuperblock(Exception):
-    def __init__(self, device):
+    def __init__(self, *, device, **kwargs):
         self.device = device
+        super().__init__(repr(dict(device=device, **kwargs)))
+
+
+class UnsupportedLayout(Exception):
+    pass
 
 
 class CantShrink(Exception):
@@ -112,11 +117,9 @@ class Requirement:
     def require(self, progress):
         assert '/' not in self.cmd
         if shutil.which(self.cmd) is None:
-            err = MissingRequirement(self)
-            progress.notify_error(
+            progress.bail(
                 'Command {!r} not found, please install the {} package'
-                .format(self.cmd, self.pkg), err)
-            raise err
+                .format(self.cmd, self.pkg), MissingRequirement(self))
 
 
 class LVMReq(Requirement):
@@ -170,6 +173,12 @@ class BlockDevice:
         # O_DIRECT would bypass the block cache, which is irrelevant here
         return os.open(
             self.devpath, os.O_SYNC | os.O_RDWR | os.O_EXCL)
+
+    @contextlib.contextmanager
+    def open_excl_ctx(self):
+        dev_fd = self.open_excl()
+        yield dev_fd
+        os.close(dev_fd)
 
     @memoized_property
     def ptable_type(self):
@@ -364,14 +373,20 @@ class PartitionTable(BlockData):
         part = None
         for part in self._iter_range(start_sector, end_sector):
             if part.geometry.start >= start_sector:
-                err = OverlappingPartition(start, end, part)
-                progress.notify_error(
+                if part.number == -1:
+                    progress.bail(
+                        'The range we want to reserve overlaps with '
+                        'the start of a reserved area at [{}, {}] ({}), '
+                        'the shrinking strategy will not work.'.format(
+                            part.geometry.start, part.geometry.end,
+                            _ped.partition_type_get_name(part.type)),
+                        OverlappingPartition(start, end, part))
+                progress.bail(
                     'The range we want to reserve overlaps with '
                     'the start of partition {} ({}), the shrinking strategy '
                     'will not work.'.format(
                         part.path, _ped.partition_type_get_name(part.type)),
-                    err)
-                raise err
+                    OverlappingPartition(start, end, part))
 
         if part is None:
             # No partitions inside the range, we're good
@@ -559,19 +574,65 @@ class SimpleContainer(BlockData):
     offset = None
 
 
+def starts_with_word(line, word):
+    return line.startswith(word) and line.split(maxsplit=1)[0] == word
+
+
 class BCacheBacking(SimpleContainer):
     def read_superblock(self):
         self.offset = None
+        self.version = None
 
         proc = subprocess.Popen(
             ['bcache-super-show', '--', self.device.devpath],
             stdout=subprocess.PIPE)
         for line in proc.stdout:
-            if line.startswith(b'dev.data.first_sector'):
+            if starts_with_word(line, b'sb.version'):
+                line = line.decode('ascii')
+                self.version = int(line.split()[1])
+            elif starts_with_word(line, b'dev.data.first_sector'):
                 line = line.decode('ascii')
                 self.offset = int(line.split(maxsplit=1)[1]) * 512
         proc.wait()
         assert proc.returncode == 0
+        assert self.offset is not None
+
+    @property
+    def is_backing(self):
+        # Whitelist versions, just in case newer backing devices
+        # are too different
+        return self.version in (1, 4)
+
+    def is_activated(self):
+        return os.path.exists(self.device.sysfspath + '/bcache')
+
+    @memoized_property
+    def cached_device(self):
+        if not self.is_activated():
+            # XXX How synchronous is this?
+            with open('/sys/fs/bcache/register', 'w') as br:
+                br.write(self.devpath + '\n')
+        return BlockDevice(devpath_from_sysdir(self.device.sysfspath + '/bcache/dev'))
+
+    def deactivate(self):
+        with open(self.device.sysfspath + '/bcache/stop', 'w') as sf:
+            # XXX Asynchronous
+            sf.write('stop\n')
+        assert not self.is_activated()
+        type(self).cached_device._reset(self)
+
+    def grow_nonrec(self, upper_bound):
+        if upper_bound != self.device.size:
+            raise NotImplementedError
+        if not self.is_activated():
+            # Nothing to do, bcache will pick up the size on activation
+            return
+        with open(self.device.sysfspath + '/bcache/resize', 'w') as sf:
+            # XXX How synchronous is this?
+            sf.write('max\n')
+        self.cached_device.reset_size()
+        assert self.cached_device.size + self.offset == upper_bound, (self.cached_device.size, self.offset, upper_bound)
+        return upper_bound
 
 
 class LUKS(SimpleContainer):
@@ -642,6 +703,7 @@ class LUKS(SimpleContainer):
         # Low-level
         # https://cryptsetup.googlecode.com/git/docs/on-disk-format.pdf
 
+        self.sb_end = None
         magic, version = struct.unpack('>6sH', os.pread(fd, 8, 0))
         assert magic == b'LUKS\xBA\xBE', magic
         assert version == 1
@@ -789,13 +851,13 @@ class BtrFS(Filesystem):
             stdout=subprocess.PIPE)
 
         for line in proc.stdout:
-            if line.startswith(b'dev_item.devid'):
+            if starts_with_word(line, b'dev_item.devid'):
                 line = line.decode('ascii')
                 self.devid = int(line.split(maxsplit=1)[1])
-            elif line.startswith(b'sectorsize'):
+            elif starts_with_word(line, b'sectorsize'):
                 line = line.decode('ascii')
                 self.block_size = int(line.split(maxsplit=1)[1])
-            elif line.startswith(b'dev_item.total_bytes'):
+            elif starts_with_word(line, b'dev_item.total_bytes'):
                 line = line.decode('ascii')
                 self.size_bytes = int(line.split(maxsplit=1)[1])
         proc.wait()
@@ -899,6 +961,58 @@ class ExtFS(Filesystem):
             'resize2fs --'.split() + [self.device.devpath, '%d' % block_count])
 
 
+class Swap(Filesystem):
+    # Not exactly a filesystem
+    can_shrink = True
+
+    def is_mounted(self):
+        # parse /proc/swaps, see tab_parse.c
+        raise NotImplementedError
+
+    def read_superblock(self):
+        # No need to do anything, UUID and LABEL are already
+        # exposed through blkid
+        with self.device.open_excl_ctx() as dev_fd:
+            big_endian, version, last_page = self.__read_sb(dev_fd)
+        self.block_size = 4096
+        self.block_count = last_page + 1
+        self.big_endian = big_endian
+        self.version = version
+
+
+    def __read_sb(self, dev_fd):
+        # Assume 4k pages, bail otherwise
+        # XXX The SB checks should be done before calling the constructor
+        magic, = struct.unpack('10s', os.pread(dev_fd, 10, 4096 - 10))
+        if magic != b'SWAPSPACE2':
+            # Might be suspend data
+            raise UnsupportedSuperblock(device=self.device, magic=magic)
+        version, last_page = struct.unpack('>II', os.pread(dev_fd, 8, 1024))
+        big_endian = True
+        if version != 1:
+            version0 = version
+            version, last_page = struct.unpack('<II', os.pread(dev_fd, 8, 1024))
+            big_endian = False
+        if version != 1:
+            raise UnsupportedSuperblock(
+                device=self.device, version=min(version, version0))
+        if not last_page:
+            raise UnsupportedSuperblock(device=self.device, last_page=0)
+
+        return big_endian, version, last_page
+
+
+    def _resize(self, target_size):
+        # using mkswap+swaplabel like GParted would drop some metadata
+        if self.big_endian:
+            fmt = '>II'
+        else:
+            fmt = '<II'
+        with self.device.open_excl_ctx() as dev_fd:
+            os.pwrite(dev_fd, struct.pack(
+                fmt, self.version, target_size // self.block_size - 1), 1024)
+
+
 class BlockStack:
     def __init__(self, stack):
         self.stack = stack
@@ -957,11 +1071,10 @@ class BlockStack:
                     'Will shrink the filesystem ({}) by {} bytes'
                     .format(fstype, shrink_size))
             else:
-                err = CantShrink(self.topmost)
-                progress.notify_error(
+                progress.bail(
                     'Can\'t shrink filesystem ({}), but need another {} bytes '
-                    'at the end'.format(fstype, shrink_size), err)
-                raise err
+                    'at the end'.format(fstype, shrink_size),
+                    CantShrink(self.topmost))
         else:
             progress.notify(
                 'The filesystem ({}) leaves enough room, '
@@ -993,6 +1106,17 @@ def get_block_stack(device, progress):
             stack.append(wrapper)
             device = wrapper.cleartext_device
             continue
+        elif device.has_bcache_superblock:
+            wrapper = BCacheBacking(device)
+            wrapper.read_superblock()
+            if not wrapper.is_backing:
+                # We only want backing, not all bcache superblocks
+                progress.bail(
+                    'BCache device isn\'t a backing device',
+                    UnsupportedSuperblock(device=device))
+            stack.append(wrapper)
+            device = wrapper.cached_device
+            continue
 
         if device.superblock_type in {'ext2', 'ext3', 'ext4'}:
             stack.append(ExtFS(device))
@@ -1004,15 +1128,16 @@ def get_block_stack(device, progress):
             stack.append(NilFS(device))
         elif device.superblock_type == 'xfs':
             stack.append(XFS(device))
+        elif device.superblock_type == 'swap':
+            stack.append(Swap(device))
         else:
             err = UnsupportedSuperblock(device=device)
             if device.superblock_type is None:
-                progress.notify_error('Unrecognised superblock', err)
+                progress.bail('Unrecognised superblock', err)
             else:
-                progress.notify_error(
+                progress.bail(
                     'Unsupported superblock type: {}'
                     .format(err.device.superblock_type), err)
-            raise err
 
         # only reached when we ended on a filesystem
         return BlockStack(stack)
@@ -1063,19 +1188,26 @@ class ProgressListener:
     pass
 
 
+class DefaultProgressHandler(ProgressListener):
+    """A progress listener that logs messages and raises exceptions
+    """
+
+    def notify(self, msg):
+        logging.info(msg)
+
+    def bail(self, msg, err):
+        logging.error(msg)
+        raise err
+
+
 class CLIProgressHandler(ProgressListener):
-    """A progress listener that prints messages and exits on error.
+    """A progress listener that prints messages and exits on error
     """
 
     def notify(self, msg):
         print(msg)
 
-    def notify_error(self, msg, err):
-        """Takes an exception so ProgressListener callers remember to raise it.
-
-        Even though this implementation won't return, others would.
-        """
-
+    def bail(self, msg, err):
         print(msg, file=sys.stderr)
         sys.exit(2)
 
@@ -1364,14 +1496,11 @@ def lv_to_bcache(device, debug, progress, join):
     block_stack.deactivate()
     del block_stack
 
-    dev_fd = device.open_excl()
-
-    synth_bdev = make_bcache_sb(pe_size, data_size, join)
-    print('Copying the bcache superblock... ', end='', flush=True)
-    synth_bdev.copy_to_physical(dev_fd, shift_by=-pe_size)
-    print('ok')
-
-    os.close(dev_fd)
+    with device.open_excl_ctx() as dev_fd:
+        synth_bdev = make_bcache_sb(pe_size, data_size, join)
+        print('Copying the bcache superblock... ', end='', flush=True)
+        synth_bdev.copy_to_physical(dev_fd, shift_by=-pe_size)
+        print('ok')
     del dev_fd
 
     rotate_lv(
@@ -1408,8 +1537,16 @@ def part_to_bcache(device, debug, progress, join):
     # there is no need.
     bsb_size = 1024**2
     data_size = device.size
+    import _ped
 
     ptable, part_start = device.ptable_context()
+    ptype = ptable.parted_disk.getPartitionBySector(
+        bytes_to_sector(part_start)).type
+    if ptype & _ped.PARTITION_LOGICAL:
+        progress.bail(
+            'Converting logical partitions is not supported.'
+            ' Please convert this disk to GPT.', UnsupportedLayout())
+    assert ptype == _ped.PARTITION_NORMAL, ptype
     ptable.reserve_space_before(part_start, bsb_size, progress)
     part_start1 = part_start - bsb_size
 
@@ -1440,9 +1577,8 @@ def part_to_bcache(device, debug, progress, join):
 
     # Check the partition we're about to convert isn't in use either,
     # otherwise the partition table couldn't be reloaded.
-    dev_fd = device.open_excl()
-    os.close(dev_fd)
-    del dev_fd
+    with device.open_excl_ctx():
+        pass
 
     print(
         'Shifting partition to start on the bcache superblock... ',
@@ -1700,6 +1836,12 @@ def cmd_to_lvm(args):
     # The position of the moved pe
     pe_newpos = pe_count * pe_size
 
+    # bootloader embedding area, sector units
+    assert pe_size >= 4096, pe_size
+    # default to 1M, to match the bootloader area on a 1M-aligned ptable
+    ba_start = 2048
+    ba_size = 2048
+
     if debug:
         print(
             'pe {} pe_newpos {} devsize {}'
@@ -1761,6 +1903,8 @@ def cmd_to_lvm(args):
 
                         pe_start = {pe_sectors}
                         pe_count = {pe_count}
+                        ba_start = {ba_start}
+                        ba_size = {ba_size}
                     }}
                 }}
                 logical_volumes {{
@@ -1799,6 +1943,8 @@ def cmd_to_lvm(args):
                 lv_uuid=lv_uuid,
                 pe_count=pe_count,
                 pe_count_pred=pe_count - 1,
+                ba_start=ba_start,
+                ba_size=ba_size,
             )))
         cfgf.flush()
 
