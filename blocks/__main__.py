@@ -58,8 +58,13 @@ def align(size, align):
 
 
 class UnsupportedSuperblock(Exception):
-    def __init__(self, device):
+    def __init__(self, *, device, **kwargs):
         self.device = device
+        super().__init__(repr(dict(device=device, **kwargs)))
+
+
+class UnsupportedLayout(Exception):
+    pass
 
 
 class CantShrink(Exception):
@@ -956,10 +961,6 @@ class ExtFS(Filesystem):
             'resize2fs --'.split() + [self.device.devpath, '%d' % block_count])
 
 
-class UnsupportedSwap(ValueError):
-    pass
-
-
 class Swap(Filesystem):
     # Not exactly a filesystem
     can_shrink = True
@@ -981,10 +982,11 @@ class Swap(Filesystem):
 
     def __read_sb(self, dev_fd):
         # Assume 4k pages, bail otherwise
+        # XXX The SB checks should be done before calling the constructor
         magic, = struct.unpack('10s', os.pread(dev_fd, 10, 4096 - 10))
         if magic != b'SWAPSPACE2':
             # Might be suspend data
-            raise UnsupportedSwap(magic)
+            raise UnsupportedSuperblock(device=self.device, magic=magic)
         version, last_page = struct.unpack('>II', os.pread(dev_fd, 8, 1024))
         big_endian = True
         if version != 1:
@@ -992,9 +994,10 @@ class Swap(Filesystem):
             version, last_page = struct.unpack('<II', os.pread(dev_fd, 8, 1024))
             big_endian = False
         if version != 1:
-            raise UnsupportedSwap('Bad version', min(version, version0))
+            raise UnsupportedSuperblock(
+                device=self.device, version=min(version, version0))
         if not last_page:
-            raise UnsupportedSwap('Last page is zero')
+            raise UnsupportedSuperblock(device=self.device, last_page=0)
 
         return big_endian, version, last_page
 
@@ -1110,7 +1113,7 @@ def get_block_stack(device, progress):
                 # We only want backing, not all bcache superblocks
                 progress.bail(
                     'BCache device isn\'t a backing device',
-                    UnsupportedSuperblock(device))
+                    UnsupportedSuperblock(device=device))
             stack.append(wrapper)
             device = wrapper.cached_device
             continue
@@ -1534,8 +1537,16 @@ def part_to_bcache(device, debug, progress, join):
     # there is no need.
     bsb_size = 1024**2
     data_size = device.size
+    import _ped
 
     ptable, part_start = device.ptable_context()
+    ptype = ptable.parted_disk.getPartitionBySector(
+        bytes_to_sector(part_start)).type
+    if ptype & _ped.PARTITION_LOGICAL:
+        progress.bail(
+            'Converting logical partitions is not supported.'
+            ' Please convert this disk to GPT.', UnsupportedLayout())
+    assert ptype == _ped.PARTITION_NORMAL, ptype
     ptable.reserve_space_before(part_start, bsb_size, progress)
     part_start1 = part_start - bsb_size
 

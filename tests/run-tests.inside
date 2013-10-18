@@ -113,6 +113,25 @@ blkid /dev/mapper/VG-$P1NAME
 blocks --debug to-bcache /dev/mapper/VG-$P1NAME
 vgcfgbackup --file after.twice VG
 
+vgchange -an
+sgdisk --zap $DISK
+sfdisk -uS --quiet --Linux $DISK <<'ZZ'
+unit: sectors
+
+2048,260096,L
+262144,1835008,E
+0,0,0
+0,0,0
+264192,260096,L
+526336,1570816,L
+ZZ
+
+mkfs.ext4 ${DISK}1
+mkfs.ext4 ${DISK}5
+mkfs.ext4 ${DISK}6
+! blocks to-bcache ${DISK}6
+! blocks to-bcache ${DISK}5
+
 # Those must be identical except for seqno and various timestamps
 git --no-pager diff --no-index --color --patience before before.restored ||:
 git --no-pager diff --no-index --color --patience after after.twice ||:
