@@ -1,3 +1,13 @@
+blocks (0.1.5-1) raring; urgency=low
+
+  * to-lvm: Add a bootloader embedding area
+  * augeas: '+' is valid in LVM identifiers
+  * bcache: Add resizing hooks
+  * Swap resizing support
+  * With logical partitions, fail earlier and guide the user
+
+ -- Gabriel de Perthuis <g2p.code+debian@gmail.com>  Fri, 18 Oct 2013 14:15:44 +0200
+
 blocks (0.1.4-1) raring; urgency=low
 
   * Relax LVM identifiers
