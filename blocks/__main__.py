@@ -26,6 +26,8 @@ LVM_PE_SIZE = 4 * 1024 ** 2
 
 ASCII_ALNUM_WHITELIST = string.ascii_letters + string.digits + '.'
 
+BCACHE_MAGIC = bytes.fromhex('c6 85 73 f6 4e 1a 45 ca 82 65 f5 7f 48 ba 6d 81')
+
 
 # Fairly strict, snooping an incorrect mapping would be bad
 dm_crypt_re = re.compile(
@@ -214,7 +216,7 @@ class BlockDevice:
         sbfd = os.open(self.devpath, os.O_RDONLY)
         magic, = struct.unpack('16s', os.pread(sbfd, 16, 4096 + 24))
         os.close(sbfd)
-        return magic == b'\xc6\x85s\xf6N\x1aE\xca\x82e\xf5\x7fH\xbam\x81'
+        return magic == BCACHE_MAGIC
 
     @memoized_property
     def size(self):
