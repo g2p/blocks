@@ -3,7 +3,7 @@
 Conversion tools for block devices.
 
 Convert between raw partitions, logical volumes, and bcache devices
-witout moving data.  `blocks` shuffles blocks and sprouts superblocks.
+without moving data.  `blocks` shuffles blocks and sprouts superblocks.
 
 ## LVM conversion
 
