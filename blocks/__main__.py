@@ -135,15 +135,23 @@ class BCacheReq(Requirement):
 
 
 def mk_dm(devname, table, readonly, exit_stack):
-    cmd = 'dmsetup create --verifyudev --'.split() + [devname]
+    needs_udev_fallback = False
+    cmd = 'dmsetup create --noudevsync --'.split() + [devname]
     if readonly:
-        cmd[2:2] = ['--readonly']
+        cmd[3:3] = ['--readonly']
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     proc.communicate(table.encode('ascii'))
-    assert proc.returncode == 0
-    exit_stack.callback(
-        lambda: quiet_call(
-            'dmsetup remove --verifyudev --'.split() + [devname]))
+    if proc.returncode != 0:
+        needs_udev_fallback = True
+        # dmsetup 1.02.65, wheezy/quantal
+        cmd[3:3] = ['--verifyudev']
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        proc.communicate(table.encode('ascii'))
+        assert proc.returncode == 0, proc.returncode
+    cmd = 'dmsetup remove --noudevsync --'.split() + [devname]
+    if needs_udev_fallback:
+        cmd[3:3] = ['--verifyudev']
+    exit_stack.callback(lambda: quiet_call(cmd))
 
 
 def aftersep(line, sep):
