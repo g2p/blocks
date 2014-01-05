@@ -147,7 +147,7 @@ def mk_dm(devname, table, readonly, exit_stack):
         cmd[3:3] = ['--verifyudev']
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         proc.communicate(table.encode('ascii'))
-        assert proc.returncode == 0, proc.returncode
+        assert proc.returncode == 0, 'Report to https://github.com/g2p/blocks/issues/8 if you see this'
     cmd = 'dmsetup remove --noudevsync --'.split() + [devname]
     if needs_udev_fallback:
         cmd[3:3] = ['--verifyudev']
