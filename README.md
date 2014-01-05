@@ -126,9 +126,14 @@ If your distribution uses Dracut (Fedora), you need Dracut 0.31 or newer.
 Edit your `/etc/fstab` to refer to filesystems by UUID, and regenerate
 your initramfs so that it picks up the new tools.
 On Debian and Ubuntu, this is done with `update-initramfs -u -k all`.
-With Dracut, this is done with `dracut -f`.
+With Dracut (Fedora), this is done with `dracut -f`.
 Arch Linux users should enable the bcache hook in `mkinitcpio.conf`
 and rerun `mkinitcpio`.
+If you don't see your distribution in this list, you are welcome to
+port [this hook](https://github.com/g2p/bcache-tools/blob/master/initcpio/install)
+to your distribution's preferred tools and contribute a patch to bcache-tools.
+Having working bcache support in your initramfs is important, as your system
+will be unbootable without.
 
 Edit your `grub.cfg` to refer to filesystems by UUID on the kernel
 command-line (this is often the case, except when you are already using
