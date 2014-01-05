@@ -19,7 +19,7 @@ install:
 - export PIP_USE_MIRRORS=true PIP_DOWNLOAD_CACHE=~/.cache/pip
 - python3.3 ez_setup.py --user
 - easy_install-3.3 --user pip
-- pip-3.3 install --user
+- python3.3 -m pip install --user
     -e. git+https://github.com/g2p/python-augeas.git@v0.4.2a1#egg=python-augeas
     https://github.com/g2p/pyparted/archive/pyparted-3.10a1.tar.gz#egg=pyparted
     git+https://github.com/g2p/vido.git#egg=vido
