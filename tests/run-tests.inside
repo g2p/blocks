@@ -9,7 +9,7 @@ if test -e /etc/lvm/backup; then mount -t tmpfs tmpfs /etc/lvm/backup; fi
 DISK=$VIDO_DISK0
 P1NAME=$(basename ${DISK}1)
 
-function coverage { python3.3 -m coverage "$@"; }
+function coverage { python3.4 -m coverage "$@"; }
 coverage erase
 # shopt -s expand_aliases also works
 function blocks {
@@ -136,6 +136,6 @@ mkfs.ext4 ${DISK}6
 git --no-pager diff --no-index --color --patience before before.restored ||:
 git --no-pager diff --no-index --color --patience after after.twice ||:
 
-coverage-3.3 report -m
-coverage-3.3 annotate
+coverage-3.4 report -m
+coverage-3.4 annotate
 
