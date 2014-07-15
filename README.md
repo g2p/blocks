@@ -47,7 +47,7 @@ bcache.
 You will need to install bcache-tools, which is available here:
 
 * <http://evilpiepirate.org/git/bcache-tools.git/>
-* <https://launchpad.net/~g2p/+archive/storage/> (`sudo add-apt-repository ppa:g2p/storage`)
+* <https://launchpad.net/~g2p/+archive/storage/> (`sudo add-apt-repository ppa:g2p/storage`; for ubuntu 13.10 and newer)
 
 Conversion makes no demands on the kernel, but to use bcache, you need
 Linux 3.10 or newer.  [My own branch](https://github.com/g2p/linux/commits/for-3.11/bcache) currently adds
@@ -62,7 +62,7 @@ the conversion from an in-memory boot environment.
 This is currently tested on Ubuntu; ports to other
 distributions are welcome.
 
-# Ubuntu PPA
+# Ubuntu PPA (13.10 and newer)
 
 You can install python3-blocks from a PPA and skip the rest
 of the installation section.
@@ -79,7 +79,7 @@ Python 3.3, pip and Git are required before installing.
 You will also need libparted (2.3 or newer, library and headers) and
 libaugeas (library only, 1.0 or newer).
 
-On Debian/Ubuntu (Ubuntu raring is recommended):
+On Debian/Ubuntu (Ubuntu 13.04 or newer is recommended):
 
     sudo aptitude install python3.3 python3-pip git libparted-dev libaugeas0 \
         pkg-config libpython3.3-dev gcc
