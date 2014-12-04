@@ -140,20 +140,23 @@ command-line (this is often the case, except when you are already using
 LVM, in which case `update-grub` tends to write a logical path).  Make
 sure you have a separate `/boot` partition.
 
-1. If you don't have a cache device yet
+1. If you don't have a cache device yet, create it on an empty SSD (or on a
+   properly aligned partition or LV on top of it; LVM's 4MiB alignment is
+   sufficient, as is the 1MiB alignment of modern partitioning tools).
 
-        sudo make-bcache -C /dev/<SSD-backed-device>
-   This will give you a cache-set uuid
+        sudo make-bcache -C /dev/<cache-device>
+   This will give you a cache-set uuid.
 
 2. If you already have a cache device
 
         ls /sys/fs/bcache
-   And copy the cache-set uuid
+   And copy the cache-set uuid.
 
 3. Finally, if you have a maintboot-compatible distribution, run:
 
         sudo blocks to-bcache --maintboot /dev/<root-device> --join <cset-uuid>
-   If you are using encryption, use the encrypted device as the root device.
+   If you are using encryption, use the encrypted device as the root device so
+   that cache contents are also encrypted.
 
 4. Otherwise,
 make sure your backups are up to date, boot to live media ([Ubuntu raring
